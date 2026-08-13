@@ -301,6 +301,7 @@ endif()
 add_executable(airplay-windows
     src/main.cpp
     src/log.cpp
+    src/settings.cpp
     src/net/socket.cpp
     src/net/tcp_server.cpp
     src/mdns/mdns_service.cpp

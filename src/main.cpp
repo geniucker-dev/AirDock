@@ -15,8 +15,11 @@
 #include "log.h"
 #include "mdns/mdns_service.h"
 #include "net/socket.h"
+#include "settings.h"
 #include "usb/usb_supervisor.h"
 #include "video/video_renderer.h"
+
+#include <SDL.h>
 
 #include <atomic>
 #include <chrono>
@@ -94,6 +97,19 @@ int main(int argc, char** argv) {
     }
 #endif
 
+    auto saved = ap::load_settings();
+    if (saved.mirror_width == 0 || saved.mirror_height == 0) {
+        SDL_Init(SDL_INIT_VIDEO);
+        SDL_DisplayMode dm;
+        if (SDL_GetCurrentDisplayMode(0, &dm) == 0 && dm.w > 0 && dm.h > 0) {
+            saved.mirror_width  = dm.w;
+            saved.mirror_height = dm.h;
+        } else {
+            saved.mirror_width  = 2560;
+            saved.mirror_height = 1440;
+        }
+    }
+
     if (!ap::net::global_init()) {
         return 1;
     }
@@ -111,9 +127,9 @@ int main(int argc, char** argv) {
     // proxy for the rare cases where you want the video stream delivered
     // via the signed-CDN path we built.
     bool hls_playback = false;
-    bool mirror_hwaccel = false;
-    int  mirror_w = 2560;   // matches DeviceContext default; CLI override
-    int  mirror_h = 1440;   //   below this comment.
+    bool mirror_hwaccel = saved.mirror_hwaccel;
+    int  mirror_w = saved.mirror_width;
+    int  mirror_h = saved.mirror_height;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--hls-proxy-playback" || arg == "--hls") {
@@ -191,8 +207,11 @@ int main(int argc, char** argv) {
     ap::airplay::LiveSettings live_settings;
     live_settings.mirror_width.store(mirror_w);
     live_settings.mirror_height.store(mirror_h);
-    live_settings.hevc_enabled.store(true);
+    live_settings.hevc_enabled.store(saved.hevc_enabled);
+    live_settings.max_fps.store(saved.max_fps);
+    live_settings.refresh_rate.store(saved.refresh_rate);
     live_settings.mirror_hwaccel.store(mirror_hwaccel);
+    live_settings.vsync_enabled.store(saved.vsync_enabled);
     ctx.live = &live_settings;
     LOG_INFO << "AirPlay Streaming HLS path: "
              << (hls_playback ? "ENABLED (--hls-proxy-playback)"
@@ -295,6 +314,7 @@ int main(int argc, char** argv) {
     hls_player.stop();
     hls_server.stop();
     server.stop();
+    ap::save_settings(ap::snapshot(live_settings));
     renderer.stop();
     ap::net::global_shutdown();
     return 0;
