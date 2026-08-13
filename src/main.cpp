@@ -19,6 +19,7 @@
 #include "usb/usb_supervisor.h"
 #include "video/video_renderer.h"
 
+#define SDL_MAIN_HANDLED
 #include <SDL.h>
 
 #include <atomic>
