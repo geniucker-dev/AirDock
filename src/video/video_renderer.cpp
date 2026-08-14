@@ -782,15 +782,24 @@ void VideoRenderer::run(const std::string& title) {
     // resizable window. F11 / double-click toggle real fullscreen,
     // H toggles chromeless, ESC peels back layers.
     UiState ui;
+    if (live_settings_)
+        ui.chromeless = live_settings_->chromeless.load(std::memory_order_relaxed);
     SDL_SetWindowHitTest(window, hit_test_cb, &ui);
 
-    bool fullscreen = false;
+    bool fullscreen = live_settings_
+        ? live_settings_->fullscreen.load(std::memory_order_relaxed) : false;
     auto toggle_fullscreen = [&]() {
         fullscreen = !fullscreen;
         SDL_SetWindowFullscreen(window,
             fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
         SDL_ShowCursor(fullscreen ? SDL_DISABLE : SDL_ENABLE);
+        if (live_settings_)
+            live_settings_->fullscreen.store(fullscreen, std::memory_order_relaxed);
     };
+    if (fullscreen) {
+        SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+        SDL_ShowCursor(SDL_DISABLE);
+    }
 
     // Track the SDL-side window border state so we only call the
     // SDL_SetWindowBordered API on actual transitions. In chromeless
@@ -907,6 +916,8 @@ void VideoRenderer::run(const std::string& title) {
                                   saved_window_w, saved_window_h);
             }
             prev_chromeless = ui.chromeless;
+            if (live_settings_)
+                live_settings_->chromeless.store(ui.chromeless, std::memory_order_relaxed);
             prev_video_w    = video_tex_w;
             prev_video_h    = video_tex_h;
         } else if (video_changed) {

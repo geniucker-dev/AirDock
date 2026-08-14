@@ -57,6 +57,8 @@ PersistentSettings load_settings() {
             else if (key == "refresh_rate")   s.refresh_rate   = std::stoi(val);
             else if (key == "mirror_hwaccel") s.mirror_hwaccel = std::stoi(val) != 0;
             else if (key == "vsync_enabled")  s.vsync_enabled  = std::stoi(val) != 0;
+            else if (key == "fullscreen")     s.fullscreen     = std::stoi(val) != 0;
+            else if (key == "chromeless")     s.chromeless     = std::stoi(val) != 0;
         } catch (...) {
             LOG_WARN << "settings: malformed value for " << key << "=" << val;
         }
@@ -81,7 +83,9 @@ void save_settings(const PersistentSettings& s) {
         << "max_fps="        << s.max_fps        << '\n'
         << "refresh_rate="   << s.refresh_rate   << '\n'
         << "mirror_hwaccel=" << s.mirror_hwaccel << '\n'
-        << "vsync_enabled="  << s.vsync_enabled  << '\n';
+        << "vsync_enabled="  << s.vsync_enabled  << '\n'
+        << "fullscreen="     << s.fullscreen     << '\n'
+        << "chromeless="     << s.chromeless     << '\n';
 
     LOG_INFO << "settings: saved to " << path;
 }
@@ -95,6 +99,8 @@ PersistentSettings snapshot(const ap::airplay::LiveSettings& live) {
     s.refresh_rate   = live.refresh_rate.load(std::memory_order_relaxed);
     s.mirror_hwaccel = live.mirror_hwaccel.load(std::memory_order_relaxed);
     s.vsync_enabled  = live.vsync_enabled.load(std::memory_order_relaxed);
+    s.fullscreen     = live.fullscreen.load(std::memory_order_relaxed);
+    s.chromeless     = live.chromeless.load(std::memory_order_relaxed);
     return s;
 }
 

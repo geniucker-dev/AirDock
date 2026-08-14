@@ -213,6 +213,8 @@ int main(int argc, char** argv) {
     live_settings.refresh_rate.store(saved.refresh_rate);
     live_settings.mirror_hwaccel.store(mirror_hwaccel);
     live_settings.vsync_enabled.store(saved.vsync_enabled);
+    live_settings.fullscreen.store(saved.fullscreen);
+    live_settings.chromeless.store(saved.chromeless);
     ctx.live = &live_settings;
     LOG_INFO << "AirPlay Streaming HLS path: "
              << (hls_playback ? "ENABLED (--hls-proxy-playback)"

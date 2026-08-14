@@ -14,6 +14,8 @@ struct PersistentSettings {
     int  refresh_rate   = 60;
     bool mirror_hwaccel = false;
     bool vsync_enabled  = true;
+    bool fullscreen     = false;
+    bool chromeless     = false;
 };
 
 std::string         settings_path();

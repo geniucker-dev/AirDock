@@ -51,6 +51,9 @@ struct LiveSettings {
     // VideoRenderer init time and on the fly when toggled (the
     // renderer rebuilds its SDL_Renderer when the value changes).
     std::atomic<bool> vsync_enabled{true};
+
+    std::atomic<bool> fullscreen{false};
+    std::atomic<bool> chromeless{false};
 };
 
 } // namespace ap::airplay
