@@ -15,8 +15,12 @@
 #include "log.h"
 #include "mdns/mdns_service.h"
 #include "net/socket.h"
+#include "settings.h"
 #include "usb/usb_supervisor.h"
 #include "video/video_renderer.h"
+
+#define SDL_MAIN_HANDLED
+#include <SDL.h>
 
 #include <atomic>
 #include <chrono>
@@ -94,6 +98,22 @@ int main(int argc, char** argv) {
     }
 #endif
 
+    auto saved = ap::load_settings();
+    if (saved.mirror_width == 0 || saved.mirror_height == 0) {
+        saved.mirror_width = 2560;
+        saved.mirror_height = 1440;
+        if (SDL_Init(SDL_INIT_VIDEO) == 0) {
+            SDL_DisplayMode dm{};
+            if (SDL_GetCurrentDisplayMode(0, &dm) == 0 &&
+                dm.w >= 320 && dm.h >= 240 &&
+                dm.w <= 7680 && dm.h <= 4320) {
+                saved.mirror_width = dm.w;
+                saved.mirror_height = dm.h;
+            }
+            SDL_Quit();
+        }
+    }
+
     if (!ap::net::global_init()) {
         return 1;
     }
@@ -111,9 +131,9 @@ int main(int argc, char** argv) {
     // proxy for the rare cases where you want the video stream delivered
     // via the signed-CDN path we built.
     bool hls_playback = false;
-    bool mirror_hwaccel = false;
-    int  mirror_w = 2560;   // matches DeviceContext default; CLI override
-    int  mirror_h = 1440;   //   below this comment.
+    bool mirror_hwaccel = saved.mirror_hwaccel;
+    int  mirror_w = saved.mirror_width;
+    int  mirror_h = saved.mirror_height;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--hls-proxy-playback" || arg == "--hls") {
@@ -157,7 +177,8 @@ int main(int argc, char** argv) {
                 "                        hands video URLs to our proxy\n"
                 "                        (experimental, VOD-style latency)\n"
                 "  --mirror-res WxH      advertise the given display\n"
-                "                        resolution to iOS (default 2560x1440;\n"
+                "                        resolution to iOS (default: saved or\n"
+                "                        detected display, else 2560x1440;\n"
                 "                        higher = sharper portrait at the cost\n"
                 "                        of bandwidth, common: 1920x1080,\n"
                 "                        2560x1440, 3840x2160)\n"
@@ -191,8 +212,13 @@ int main(int argc, char** argv) {
     ap::airplay::LiveSettings live_settings;
     live_settings.mirror_width.store(mirror_w);
     live_settings.mirror_height.store(mirror_h);
-    live_settings.hevc_enabled.store(true);
+    live_settings.hevc_enabled.store(saved.hevc_enabled);
+    live_settings.max_fps.store(saved.max_fps);
+    live_settings.refresh_rate.store(saved.refresh_rate);
     live_settings.mirror_hwaccel.store(mirror_hwaccel);
+    live_settings.vsync_enabled.store(saved.vsync_enabled);
+    live_settings.fullscreen.store(saved.fullscreen);
+    live_settings.chromeless.store(saved.chromeless);
     ctx.live = &live_settings;
     LOG_INFO << "AirPlay Streaming HLS path: "
              << (hls_playback ? "ENABLED (--hls-proxy-playback)"
@@ -223,6 +249,7 @@ int main(int argc, char** argv) {
     // Start the SDL2 renderer window upfront. Streams will push decoded
     // frames once an iPhone connects.
     ap::video::VideoRenderer renderer;
+    renderer.set_live_settings(&live_settings);
     if (!renderer.start("AirPlay-Windows")) {
         LOG_WARN << "VideoRenderer could not start — running headless";
     }
@@ -233,7 +260,6 @@ int main(int argc, char** argv) {
         (local_ip.empty() || local_ip == "0.0.0.0") && !local_ipv6.empty()
             ? local_ipv6 : local_ip;
     renderer.set_idle_info(ctx.name, display_ip);
-    renderer.set_live_settings(&live_settings);
     ctx.renderer = &renderer;
 
     ap::video::HlsPlayer hls_player;
@@ -295,6 +321,7 @@ int main(int argc, char** argv) {
     hls_player.stop();
     hls_server.stop();
     server.stop();
+    ap::save_settings(ap::snapshot(live_settings));
     renderer.stop();
     ap::net::global_shutdown();
     return 0;
