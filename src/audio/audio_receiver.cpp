@@ -299,7 +299,7 @@ void AudioReceiver::thread_fn() {
                          << decoder_->frames_decoded();
             }
 
-            if (output_ && got > 0) {
+            if (got > 0) {
                 // Drain every available PCM sample from the decoder's
                 // queue into SDL. We do it in one pull — buffer is large
                 // enough for the ~1920 stereo samples of a single AAC-ELD
@@ -308,7 +308,11 @@ void AudioReceiver::thread_fn() {
                 int     have = 0;
                 while ((have = decoder_->pull_pcm_s16(
                             pcm, static_cast<int>(sizeof(pcm) / sizeof(pcm[0])))) > 0) {
-                    output_->push(pcm, have);
+                    if (cfg_.renderer) {
+                        cfg_.renderer->push_audio_pcm(
+                            pcm, have, cfg_.sample_rate, 2);
+                    }
+                    if (output_) output_->push(pcm, have);
                 }
             }
         }

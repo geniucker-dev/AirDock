@@ -137,11 +137,29 @@ full handshake + the H.264 stream coming in.
 |--------------------|-------------------------------------------------|
 | `H`                | Toggle "Hide UI" — hides every panel + the SDL window border, snaps the window to the video aspect ratio |
 | `F` / `F11` / dbl-click | Toggle real OS fullscreen                  |
+| `R`                | Start / stop an MP4 recording of the AirPlay video stream |
 | `ESC`              | Peels back: exits fullscreen, then Hide UI, then quits |
 
 The toolbar also exposes a **Disconnect** button (only visible when a
 session is active) that drops the current AirPlay client and returns
 the renderer to the idle "Waiting for AirPlay" screen.
+
+The **REC** toolbar button (or `R`) records the decoded AirPlay video to
+an MP4 file. The destination can be selected with the native **Browse...**
+button in **Options > Recording**; by default files are saved next to the
+`airplay-windows.exe` application. Encoding runs
+on a bounded background queue so a slow disk cannot increase mirroring
+latency. Resolution/orientation changes are fitted into the original MP4
+canvas without stretching.
+The recording panel also exposes **Auto / GPU / CPU** encoder selection and
+a 2-40 Mbps bitrate control. Auto prefers NVIDIA NVENC, AMD AMF, Intel Quick
+Sync, then Windows Media Foundation before falling back to a CPU encoder.
+The MP4 video codec can be switched between broadly compatible **H.264** and
+more efficient **H.265/HEVC**. HEVC uses `hevc_nvenc`, `hevc_amf`, `hevc_qsv`,
+`hevc_mf`, or `libx265`, depending on the selected hardware mode and what the
+installed FFmpeg build exposes.
+Decoded RAOP audio is muxed into the same MP4 as a synchronized stereo AAC
+track (192 kbps), independently of whether a Windows playback device exists.
 
 ## AirPlay over USB-C cable (no Wi-Fi)
 

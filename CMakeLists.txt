@@ -284,7 +284,6 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/imgui_demo.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer2.cpp
 )
@@ -325,6 +324,7 @@ add_executable(airplay-windows
     src/airplay/reverse_channel.cpp
     src/airplay/routes.cpp
     src/video/h264_decoder.cpp
+    src/video/video_recorder.cpp
     ${HLS_PLAYER_SRC}
     src/video/video_renderer.cpp
     src/audio/audio_receiver.cpp

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -17,6 +18,8 @@ struct AVFrame;
 namespace ap::airplay { struct LiveSettings; }
 
 namespace ap::video {
+
+class VideoRecorder;
 
 // RAII handle around an FFmpeg refcounted AVFrame so the
 // renderer can own decoder output without copying any pixel
@@ -93,6 +96,11 @@ public:
     // (latest-wins) so no backlog accumulates if the GPU is slow.
     // Thread-safe.
     void push_avframe(const AVFrame* src, int64_t origin_ns = 0);
+
+    // Decoded RAOP PCM, forwarded to the active MP4 recorder before SDL
+    // playback. sample_count is the total number of interleaved int16 values.
+    void push_audio_pcm(const int16_t* samples, int sample_count,
+                        int sample_rate, int channels);
 
     // Account for one encrypted-mirror-frame body received. Updates
     // total payload bytes + an EMA-smoothed Mbps so the status bar
@@ -282,6 +290,10 @@ private:
     // "Disconnect" click. Empty by default so missing wiring is
     // a silent no-op rather than a crash.
     std::function<void()>      disconnect_handler_;
+
+    // MP4 writer. Encoding runs on its own bounded worker queue so recording
+    // cannot add latency to mirror decode/render.
+    std::unique_ptr<VideoRecorder> recorder_;
 };
 
 } // namespace ap::video

@@ -1,4 +1,5 @@
 #include "video/video_renderer.h"
+#include "video/video_recorder.h"
 #include "airplay/live_settings.h"
 #include "log.h"
 
@@ -15,10 +16,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <vector>
 
 #if defined(_WIN32)
     #include <dwmapi.h>
+    #include <shobjidl.h>
     // Duplicate the Win11 backdrop constants locally so we don't require
     // the very latest Windows SDK headers at build time. The DwmApi call
     // is still resolved at runtime against dwmapi.dll, which silently
@@ -62,6 +65,62 @@ void enable_mica_backdrop(SDL_Window* w) {
     int backdrop = DWMSBT_MAINWINDOW;
     ::DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
                             &backdrop, sizeof(backdrop));
+}
+
+// Native Windows folder picker, parented to the SDL application window.
+// Returns false for Cancel as well as dialog creation errors; in both cases
+// the current path remains untouched.
+bool browse_recording_folder(SDL_Window* w, const std::string& initial,
+                             std::string& selected) {
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (!SDL_GetWindowWMInfo(w, &info)) return false;
+
+    const HRESULT init_hr = CoInitializeEx(
+        nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    const bool should_uninitialize = SUCCEEDED(init_hr);
+
+    IFileOpenDialog* dialog = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
+                                  CLSCTX_INPROC_SERVER,
+                                  IID_PPV_ARGS(&dialog));
+    if (SUCCEEDED(hr) && dialog) {
+        DWORD options = 0;
+        dialog->GetOptions(&options);
+        dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM |
+                           FOS_PATHMUSTEXIST);
+        dialog->SetTitle(L"Choose the recording folder");
+
+        try {
+            const std::wstring initial_w =
+                std::filesystem::u8path(initial).wstring();
+            IShellItem* initial_item = nullptr;
+            if (SUCCEEDED(SHCreateItemFromParsingName(
+                    initial_w.c_str(), nullptr, IID_PPV_ARGS(&initial_item)))) {
+                dialog->SetFolder(initial_item);
+                initial_item->Release();
+            }
+        } catch (const std::exception&) {
+            // Keep the system default folder if the typed path is malformed.
+        }
+
+        hr = dialog->Show(info.info.win.window);
+        if (SUCCEEDED(hr)) {
+            IShellItem* result = nullptr;
+            if (SUCCEEDED(dialog->GetResult(&result)) && result) {
+                PWSTR path_w = nullptr;
+                if (SUCCEEDED(result->GetDisplayName(
+                        SIGDN_FILESYSPATH, &path_w)) && path_w) {
+                    selected = std::filesystem::path(path_w).u8string();
+                    CoTaskMemFree(path_w);
+                }
+                result->Release();
+            }
+        }
+        dialog->Release();
+    }
+    if (should_uninitialize) CoUninitialize();
+    return !selected.empty();
 }
 #else
 void enable_mica_backdrop(SDL_Window*) {}
@@ -119,7 +178,6 @@ namespace {
 // owns SDL events.
 struct UiState {
     bool chromeless = false;
-    bool show_demo  = false; // F12 toggles ImGui demo, dev only
 };
 
 // Hit-test for the borderless chromeless window: edges are resize
@@ -352,7 +410,7 @@ SDL_Rect fit_inside(int src_w, int src_h, int win_w, int win_h) {
 
 } // namespace
 
-VideoRenderer::VideoRenderer()  = default;
+VideoRenderer::VideoRenderer() : recorder_(std::make_unique<VideoRecorder>()) {}
 VideoRenderer::~VideoRenderer() { stop(); }
 
 bool VideoRenderer::start(const std::string& title) {
@@ -362,9 +420,10 @@ bool VideoRenderer::start(const std::string& title) {
 }
 
 void VideoRenderer::stop() {
-    if (!running_.exchange(false)) return;
+    running_.store(false);
     cv_.notify_all();
     if (thread_.joinable()) thread_.join();
+    if (recorder_) recorder_->stop();
 }
 
 void VideoRenderer::push_cover_art(const uint8_t* jpeg, std::size_t size) {
@@ -475,6 +534,7 @@ DecodedFrame& DecodedFrame::operator=(DecodedFrame&& o) noexcept {
 
 void VideoRenderer::push_avframe(const AVFrame* src, int64_t origin_ns) {
     if (!src) return;
+    if (recorder_) recorder_->submit(src);
     AVFrame* clone = av_frame_clone(src);
     if (!clone) return;
 
@@ -512,6 +572,12 @@ void VideoRenderer::push_avframe(const AVFrame* src, int64_t origin_ns) {
         frame_origin_ns_= origin_ns;
         cv_.notify_one();
     }
+}
+
+void VideoRenderer::push_audio_pcm(const int16_t* samples, int sample_count,
+                                   int sample_rate, int channels) {
+    if (recorder_)
+        recorder_->submit_audio(samples, sample_count, sample_rate, channels);
 }
 
 void VideoRenderer::record_payload_bytes(std::size_t n) {
@@ -594,6 +660,8 @@ void VideoRenderer::push_frame(const uint8_t* y, int y_stride,
                                int width, int height,
                                int64_t origin_ns) {
     if (width <= 0 || height <= 0) return;
+    if (recorder_) recorder_->submit_i420(y, y_stride, u, u_stride,
+                                          v, v_stride, width, height);
     const int c_w = width  / 2;
     const int c_h = height / 2;
 
@@ -635,6 +703,8 @@ void VideoRenderer::push_frame_nv12(const uint8_t* y,  int y_stride,
                                     int width, int height,
                                     int64_t origin_ns) {
     if (width <= 0 || height <= 0) return;
+    if (recorder_) recorder_->submit_nv12(y, y_stride, uv, uv_stride,
+                                          width, height);
     const int uv_h = height / 2;
 
     // Stats: identical book-keeping as push_frame so the FPS EMA /
@@ -783,6 +853,17 @@ void VideoRenderer::run(const std::string& title) {
     // H toggles chromeless, ESC peels back layers.
     UiState ui;
     SDL_SetWindowHitTest(window, hit_test_cb, &ui);
+
+    std::array<char, 1024> recording_dir{};
+    VideoRecorder::Options recording_options;
+    const std::string default_recording_dir = VideoRecorder::default_directory();
+    std::snprintf(recording_dir.data(), recording_dir.size(), "%s",
+                  default_recording_dir.c_str());
+    auto toggle_recording = [&]() {
+        if (!recorder_) return;
+        if (recorder_->status().recording) recorder_->stop();
+        else recorder_->start(recording_dir.data(), recording_options);
+    };
 
     bool fullscreen = false;
     auto toggle_fullscreen = [&]() {
@@ -963,8 +1044,8 @@ void VideoRenderer::run(const std::string& title) {
                     case SDLK_h:
                         ui.chromeless = !ui.chromeless;
                         break;
-                    case SDLK_F12:
-                        ui.show_demo = !ui.show_demo;
+                    case SDLK_r:
+                        toggle_recording();
                         break;
                     default: break;
                 }
@@ -1441,13 +1522,15 @@ void VideoRenderer::run(const std::string& title) {
             // collapses the entire chrome (this toolbar included)
             // - bring it back with the H hotkey or ESC.
             const float btn_disc_w = 110.0f;
+            const float btn_rec_w  = 84.0f;
             const float btn_hide_w = 110.0f;
             const float btn_full_w = 100.0f;
             const float gap = 8.0f;
             const bool  show_disc  = has_active_dev && disconnect_handler_;
+            const bool  is_recording = recorder_ && recorder_->status().recording;
             const float row_w =
                 (show_disc ? btn_disc_w + gap : 0.0f) +
-                btn_hide_w + gap + btn_full_w;
+                btn_rec_w + gap + btn_hide_w + gap + btn_full_w;
             ImGui::SameLine();
             ImGui::SetCursorPosX(fw - row_w - 12.0f);
             if (show_disc) {
@@ -1462,6 +1545,20 @@ void VideoRenderer::run(const std::string& title) {
                 }
                 ImGui::SameLine();
             }
+            if (is_recording) {
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                                      ImVec4(0.65f, 0.10f, 0.12f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                      ImVec4(0.78f, 0.15f, 0.17f, 1.0f));
+            }
+            if (ImGui::Button(is_recording ? "Stop REC" : "REC",
+                              ImVec2(btn_rec_w, 0))) {
+                toggle_recording();
+            }
+            if (is_recording) ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Start/stop MP4 recording (R)");
+            ImGui::SameLine();
             if (ImGui::Button("Hide UI", ImVec2(btn_hide_w, 0))) {
                 ui.chromeless = true;
             }
@@ -1737,14 +1834,86 @@ void VideoRenderer::run(const std::string& title) {
                     ImGui::TextDisabled("mDNS   advertising");
                 }
                 if (ImGui::CollapsingHeader("Recording")) {
-                    ImGui::TextDisabled("(not yet implemented)");
+                    const auto rec = recorder_->status();
+                    ImGui::TextUnformatted("Folder");
+#if defined(_WIN32)
+                    ImGui::SetNextItemWidth(-92.0f);
+#endif
+                    ImGui::InputText("##recording_folder", recording_dir.data(),
+                                     recording_dir.size());
+#if defined(_WIN32)
+                    ImGui::SameLine();
+                    if (ImGui::Button("Browse...", ImVec2(-1.0f, 0.0f))) {
+                        std::string selected_folder;
+                        if (browse_recording_folder(
+                                window, recording_dir.data(), selected_folder)) {
+                            std::snprintf(recording_dir.data(),
+                                          recording_dir.size(), "%s",
+                                          selected_folder.c_str());
+                        }
+                    }
+#endif
+                    const char* encoder_modes[] = {
+                        "Auto (GPU preferred)", "GPU only", "CPU only"
+                    };
+                    const char* video_codecs[] = {
+                        "H.264 (compatible)", "H.265 / HEVC (smaller)"
+                    };
+                    int video_codec =
+                        static_cast<int>(recording_options.codec);
+                    if (ImGui::Combo("Video codec", &video_codec,
+                                     video_codecs, 2)) {
+                        recording_options.codec =
+                            static_cast<VideoRecorder::VideoCodec>(video_codec);
+                    }
+                    int encoder_mode =
+                        static_cast<int>(recording_options.encoder);
+                    if (ImGui::Combo("Encoder", &encoder_mode,
+                                     encoder_modes, 3)) {
+                        recording_options.encoder =
+                            static_cast<VideoRecorder::EncoderMode>(encoder_mode);
+                    }
+                    ImGui::SliderInt("Bitrate (Mbps)",
+                                     &recording_options.bitrate_mbps, 2, 40);
+                    ImGui::TextDisabled(
+                        "Lower bitrate = smaller file / more compression");
+                    if (rec.recording)
+                        ImGui::TextDisabled("Settings apply to the next recording");
+                    if (rec.recording) {
+                        const int64_t seconds = rec.elapsed_ms / 1000;
+                        ImGui::TextColored(ImVec4(1.0f, 0.30f, 0.32f, 1.0f),
+                                           "REC  %02lld:%02lld",
+                                           static_cast<long long>(seconds / 60),
+                                           static_cast<long long>(seconds % 60));
+                        ImGui::Text("Frames: %llu",
+                            static_cast<unsigned long long>(rec.frames));
+                        ImGui::Text("Audio: %s",
+                            rec.audio_samples > 0 ? "AAC stereo" : "waiting for PCM");
+                        if (rec.dropped > 0) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.70f, 0.25f, 1.0f),
+                                "Queue drops: %llu",
+                                static_cast<unsigned long long>(rec.dropped));
+                        }
+                        if (!rec.codec.empty())
+                            ImGui::TextWrapped("Codec: %s", rec.codec.c_str());
+                        if (ImGui::Button("Stop recording", ImVec2(-1, 0)))
+                            toggle_recording();
+                    } else {
+                        ImGui::TextDisabled("MP4 video (decoded AirPlay stream)");
+                        if (ImGui::Button("Start recording", ImVec2(-1, 0)))
+                            toggle_recording();
+                    }
+                    if (!rec.output_path.empty())
+                        ImGui::TextWrapped("File: %s", rec.output_path.c_str());
+                    if (!rec.error.empty())
+                        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                                           "%s", rec.error.c_str());
                 }
                 if (ImGui::CollapsingHeader("Hotkeys")) {
-                    ImGui::BulletText("F      Toggle fullscreen");
-                    ImGui::BulletText("F11    Toggle fullscreen");
-                    ImGui::BulletText("DblClk Toggle fullscreen");
-                    ImGui::BulletText("F12    Toggle ImGui demo");
-                    ImGui::BulletText("Esc    Exit fullscreen / quit");
+                    ImGui::BulletText("F / F11 / double-click  Toggle fullscreen");
+                    ImGui::BulletText("H       Hide / show the interface");
+                    ImGui::BulletText("R       Start / stop recording");
+                    ImGui::BulletText("Esc     Exit fullscreen / show UI / quit");
                 }
                 ImGui::PopTextWrapPos();
             }
@@ -1872,8 +2041,6 @@ void VideoRenderer::run(const std::string& title) {
             }
         }
 
-        if (ui.show_demo) ImGui::ShowDemoWindow(&ui.show_demo);
-
         ImGui::Render();
         ImGui_ImplSDLRenderer2_RenderDrawData(
             ImGui::GetDrawData(), renderer);
@@ -1901,6 +2068,7 @@ void VideoRenderer::run(const std::string& title) {
         }
     }
 
+    if (recorder_) recorder_->stop();
     if (title_tex)     SDL_DestroyTexture(title_tex);
     if (artist_tex)    SDL_DestroyTexture(artist_tex);
     if (album_tex)     SDL_DestroyTexture(album_tex);
