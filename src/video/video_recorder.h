@@ -43,7 +43,7 @@ public:
     VideoRecorder(const VideoRecorder&) = delete;
     VideoRecorder& operator=(const VideoRecorder&) = delete;
 
-    bool start(const std::string& directory, Options options = {});
+    bool start(const std::string& directory, Options options);
     void stop();
 
     void submit(const AVFrame* frame);

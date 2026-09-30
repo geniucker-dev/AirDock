@@ -43,6 +43,8 @@ private:
     unsigned int       device_{0};   // SDL_AudioDeviceID is uint32_t
     int                channels_{0};
     int                sample_rate_{0};
+    uint32_t           bytes_per_second_{0};
+    bool               playing_{false};
     std::atomic<float> gain_{1.0f};  // linear multiplier, 0.0 = muted
 };
 

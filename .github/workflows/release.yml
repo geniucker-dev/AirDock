@@ -29,8 +29,7 @@ jobs:
       # commit whose working tree carries port versions that aren't
       # listed in our manifest's `builtin-baseline` versions/baseline.json.
       # Clone a fresh vcpkg pinned at our baseline so port versions
-      # and baseline stay in sync. lukka/run-vcpkg caches the clone
-      # and bootstrap output keyed on the commit id.
+      # and baseline stay in sync.
       - name: Read vcpkg baseline from manifest
         id: vcpkg
         shell: pwsh
@@ -40,20 +39,12 @@ jobs:
           Write-Host "vcpkg baseline = $baseline"
 
       - name: Set up pinned vcpkg
+        # run-vcpkg configures vcpkg's package-granular GitHub Actions binary
+        # cache. A second cache of build/vcpkg_installed would duplicate those
+        # artifacts and spend extra time archiving/restoring a large tree.
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: ${{ steps.vcpkg.outputs.baseline }}
-
-      # Cache the manifest install output (libplist + openssl + ffmpeg
-      # + sdl2 + sdl2-ttf compiled artifacts) keyed on vcpkg.json.
-      # Subsequent runs skip the ~10 min compile step.
-      - name: Cache vcpkg installed
-        uses: actions/cache@v4
-        with:
-          path: build/vcpkg_installed
-          key: vcpkg-installed-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-          restore-keys: |
-            vcpkg-installed-${{ runner.os }}-
 
       - name: Configure (CMake + vcpkg manifest mode)
         shell: pwsh

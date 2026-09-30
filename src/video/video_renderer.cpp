@@ -753,6 +753,20 @@ void VideoRenderer::run(const std::string& title) {
     // receivers. Must be set before SDL_CreateRenderer to take effect.
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
 
+#if SDL_VERSION_ATLEAST(2, 0, 8)
+    // iOS screen mirroring is full-range YCbCr (UxPlay reports AirPlay's
+    // colorimetry as range=0..255, BT.709 matrix, sRGB transfer).  SDL2's
+    // automatic mode assumes studio/limited range for IYUV and NV12 video;
+    // expanding an already-full-range phone frame makes icons and highlights
+    // clip, which looks much like incorrectly displayed HDR. JPEG is the only
+    // SDL2 conversion mode that preserves full-range samples (despite its
+    // historical name), and applies to both IYUV and NV12 textures. SDL2 does
+    // not expose separate range and matrix controls; SDL3 should use explicit
+    // colorspace properties when this renderer is migrated.
+    SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_JPEG);
+    LOG_INFO << "VideoRenderer YUV conversion: full range (AirPlay/sRGB)";
+#endif
+
     SDL_Window*   window   = SDL_CreateWindow(
         title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         kDefaultWinWidth, kDefaultWinHeight,
