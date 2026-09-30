@@ -6,7 +6,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(MSVC)
-    add_compile_options(/W4 /permissive- /utf-8)
+    # Let cl.exe compile independent translation units concurrently inside the
+    # main (large) Visual Studio project. MSBuild's /m only parallelizes at the
+    # project level, and this solution has just two substantial projects.
+    add_compile_options(/W4 /permissive- /utf-8 /MP)
     add_definitions(-D_WIN32_WINNT=0x0A00 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
                     -D_CRT_SECURE_NO_WARNINGS)
 else()
@@ -334,6 +337,20 @@ add_executable(airplay-windows
     src/usb/pair_record.cpp
     src/usb/usb_supervisor.cpp
 )
+
+option(AIRPLAY_BUILD_TESTS "Build lightweight receiver tests" OFF)
+if(AIRPLAY_BUILD_TESTS)
+    enable_testing()
+    add_executable(audio-output-smoke
+        tests/audio_output_smoke.cpp
+        src/audio/audio_output.cpp
+        src/log.cpp)
+    target_include_directories(audio-output-smoke PRIVATE src)
+    target_link_libraries(audio-output-smoke PRIVATE ${SDL2_TARGET})
+    add_test(NAME audio-output-smoke COMMAND audio-output-smoke)
+    set_tests_properties(audio-output-smoke PROPERTIES
+        ENVIRONMENT "SDL_AUDIODRIVER=dummy")
+endif()
 
 target_include_directories(airplay-windows PRIVATE src)
 target_link_libraries(airplay-windows PRIVATE OpenSSL::Crypto ${FFMPEG_TARGETS} ${SDL2_TARGET} ${SDL2_TTF_TARGET} imgui)
