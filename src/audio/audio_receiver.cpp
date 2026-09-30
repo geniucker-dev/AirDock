@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <sstream>
+#include <unordered_map>
 
 #include <openssl/evp.h>
 
@@ -147,16 +148,27 @@ void AudioReceiver::thread_fn() {
     unsigned char cleartext[4096];
     uint64_t pkts            = 0;
     uint64_t dedup_dropped   = 0;
+    uint64_t reordered       = 0;
+    uint64_t gaps_skipped    = 0;
     uint64_t total_bytes     = 0;
     uint64_t hist_0_16 = 0, hist_17_64 = 0, hist_65_256 = 0,
              hist_257_512 = 0, hist_513_plus = 0;
     int big_pkts_logged = 0;
 
-    // RAOP retransmits lost packets; iOS typically sends each seq 2-3 times
-    // for resilience. We keep a bitset of recently-seen seqs so the decoder
-    // only sees each audio frame once. seq is 16-bit — we use a 65 536-bit
-    // bitset via a boolean vector (8 KB).
-    std::vector<bool> seen_seq(65536, false);
+    // UDP packets (and especially RAOP's redundant/retransmitted packets) can
+    // arrive out of order. Feeding compressed AAC/ALAC frames to FFmpeg in
+    // arrival order makes one small network hiccup poison decoder state and
+    // can result in seconds of silence. Keep a short sequence-number jitter
+    // buffer, as UxPlay's raop_buffer does, and only decode in RTP order.
+    constexpr auto kReorderWait = std::chrono::milliseconds(50);
+    // AAC-ELD is variable bitrate: valid silence/low-complexity frames can be
+    // far smaller than 100 bytes. Four-byte timing datagrams are not codec
+    // frames, while an encrypted codec frame contains at least one AES block.
+    constexpr int kMinEncodedPayloadBytes = 16;
+    std::unordered_map<uint16_t, std::vector<unsigned char>> pending;
+    bool have_expected = false;
+    uint16_t expected_seq = 0;
+    auto gap_since = std::chrono::steady_clock::time_point{};
 
     // Silence watchdog: any valid RTP packet pushes the renderer to
     // "playing"; going idle for more than kSilencePauseMs pushes it to
@@ -171,7 +183,7 @@ void AudioReceiver::thread_fn() {
     auto last_packet = std::chrono::steady_clock::now();
     // Arm the silence watchdog only after we've seen at least one real
     // audio packet. Otherwise, a fresh mirror session that starts with
-    // iOS's keepalive-only dribble (sub-100B packets) would flip the
+    // iOS's sub-AES-block timing/keepalive datagrams would flip the
     // renderer to rate=0 within 500ms and paint a pause badge over the
     // first video frame, even though the iPhone is actively playing.
     bool audio_ever_seen = false;
@@ -188,19 +200,73 @@ void AudioReceiver::thread_fn() {
                     cfg_.renderer->push_playback_rate(0.0f);
                 }
             }
-            continue;
+            // A receive timeout is also an opportunity to expire a missing
+            // sequence below; do not continue while packets are buffered.
+            if (pending.empty()) continue;
         }
-        if (n < 12) continue;   // RTP header minimum
+        if (n >= 12) {
+            const int received_payload_len = n - 12;
+            if (received_payload_len >= kMinEncodedPayloadBytes) {
+                const uint16_t received_seq =
+                    (static_cast<uint16_t>(buf[2]) << 8) | buf[3];
+                if (!have_expected) {
+                    expected_seq = received_seq;
+                    have_expected = true;
+                }
 
-        // Only count substantial packets (real audio) as proof of
-        // active playback. During pause iOS keeps dribbling small
-        // keepalive / silence-frame packets (observed around 32 B
-        // payload) at the normal packet rate — they used to keep
-        // resetting the silence watchdog and flipping rate back to 1.
-        // Real AAC-ELD / ALAC audio frames are 400+ bytes once any
-        // musical content is present, so a 100-byte threshold separates
-        // the two cleanly.
-        constexpr int kAudioPacketMinBytes = 100;
+                const uint16_t distance =
+                    static_cast<uint16_t>(received_seq - expected_seq);
+                // Distances in the upper half of the sequence space are old
+                // packets, including retransmits that arrived after expiry.
+                if (distance >= 0x8000u) {
+                    ++dedup_dropped;
+                } else {
+                    auto inserted = pending.emplace(
+                        received_seq,
+                        std::vector<unsigned char>(buf, buf + n));
+                    if (!inserted.second) ++dedup_dropped;
+                }
+            }
+        }
+
+        // Select exactly the next RTP frame. If it is missing, give a
+        // redundant/retransmitted copy 50 ms to arrive before advancing to
+        // the closest buffered sequence. This bounds added latency while
+        // preventing the long decoder stalls caused by out-of-order input.
+        auto ready = have_expected ? pending.find(expected_seq) : pending.end();
+        if (ready == pending.end() && !pending.empty()) {
+            const auto now = std::chrono::steady_clock::now();
+            if (gap_since == std::chrono::steady_clock::time_point{}) gap_since = now;
+            if (now - gap_since < kReorderWait) continue;
+
+            auto closest = pending.end();
+            uint32_t closest_distance = 0x10000u;
+            for (auto it = pending.begin(); it != pending.end(); ++it) {
+                const uint16_t distance =
+                    static_cast<uint16_t>(it->first - expected_seq);
+                if (distance < closest_distance) {
+                    closest = it;
+                    closest_distance = distance;
+                }
+            }
+            gaps_skipped += closest_distance;
+            expected_seq = closest->first;
+            ready = closest;
+        }
+        if (ready == pending.end()) continue;
+
+        std::vector<unsigned char> packet = std::move(ready->second);
+        pending.erase(ready);
+        if (gap_since != std::chrono::steady_clock::time_point{}) ++reordered;
+        gap_since = {};
+        expected_seq = static_cast<uint16_t>(expected_seq + 1);
+        n = static_cast<int>(packet.size());
+        std::memcpy(buf, packet.data(), packet.size());
+
+        // A complete encrypted codec frame is active audio even when AAC's
+        // variable bitrate makes a silence frame small. Sub-block timing
+        // datagrams are filtered before the jitter buffer.
+        constexpr int kAudioPacketMinBytes = kMinEncodedPayloadBytes + 12;
         if (n >= kAudioPacketMinBytes) {
             last_packet = std::chrono::steady_clock::now();
             audio_ever_seen = true;
@@ -212,7 +278,7 @@ void AudioReceiver::thread_fn() {
             }
         }
 
-        // Parse RTP header (RFC 3550, 12-byte fixed part).
+        // Parse RTP header (AirPlay audio uses the 12-byte fixed RTP header).
         const uint8_t  pt  =  buf[1] & 0x7f;
         const uint16_t seq = (static_cast<uint16_t>(buf[2]) << 8) | buf[3];
         const uint32_t ts  = (static_cast<uint32_t>(buf[4]) << 24)
@@ -249,29 +315,10 @@ void AudioReceiver::thread_fn() {
         else if (payload_len <= 512) ++hist_257_512;
         else                         ++hist_513_plus;
 
-        // Dedup only the "big enough to be real audio" packets — the dwarf
-        // sync packets (4 B) are not audio frames, they come with their own
-        // overlapping seq values we don't want to blacklist.
-        const bool real_audio = (payload_len >= 100);
-        bool is_duplicate     = false;
-        if (real_audio) {
-            if (seen_seq[seq]) {
-                is_duplicate = true;
-                ++dedup_dropped;
-            } else {
-                seen_seq[seq] = true;
-                // Clear a sliding 8k-wide window behind the new seq so the
-                // bitset doesn't stay full forever once we wrap past 65k.
-                const uint16_t erase_from = static_cast<uint16_t>(seq - 8192);
-                // erase a small contiguous region every 1024 packets to cap
-                // the work per packet.
-                if ((pkts & 0x3ff) == 0) {
-                    for (int k = 0; k < 1024; ++k) {
-                        seen_seq[static_cast<uint16_t>(erase_from + k)] = false;
-                    }
-                }
-            }
-        }
+        // Sub-AES-block control datagrams were filtered before entering the
+        // jitter buffer; all remaining variable-bitrate frames are audio.
+        const bool real_audio = (payload_len >= kMinEncodedPayloadBytes);
+        const bool is_duplicate = false;
 
         // Verbose log for the first couple of everything, AND for the first
         // 5 non-duplicate "big enough to be real audio" packets. That's
@@ -326,6 +373,8 @@ void AudioReceiver::thread_fn() {
     LOG_INFO << "AudioReceiver stopped (" << pkts << " pkts, "
              << total_bytes << " payload bytes, "
              << dedup_dropped << " duplicate audio frames dropped, "
+             << reordered << " reorder waits recovered, "
+             << gaps_skipped << " missing frames skipped, "
              << (decoder_ ? decoder_->frames_decoded() : 0)
              << " PCM frames decoded)";
     LOG_INFO << "  payload size histogram: "
