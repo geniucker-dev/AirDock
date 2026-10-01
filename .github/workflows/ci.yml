@@ -3,8 +3,8 @@ name: CI
 # Continuous integration build + test. Fires on:
 #   - every push to main (catches breakage in your own commits)
 #   - every pull request (gives reviewers a green/red signal)
-# Releases live in release.yml (separate workflow, fires on tag push)
-# so the CI run stays fast and never produces release artifacts.
+# Every successful build publishes a short-lived workflow artifact for
+# reviewers and testers. Versioned releases remain in release.yml.
 
 on:
   push:
@@ -49,6 +49,18 @@ jobs:
 
       - name: Build Release
         run: cmake --build build --config Release --parallel
+
+      # upload-artifact creates the downloadable zip itself. Upload the
+      # Release directory directly rather than putting a zip inside a zip.
+      # Keep this immediately after the build so a later test failure does not
+      # hide an otherwise usable diagnostic build from the workflow run.
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: airplay-windows-ci-${{ github.run_number }}-${{ github.sha }}-x64
+          path: build/Release/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Run native smoke tests
         run: ctest --test-dir build -C Release --output-on-failure
