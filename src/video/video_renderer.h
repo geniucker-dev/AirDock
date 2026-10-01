@@ -87,12 +87,10 @@ public:
 
     // Refcount-based push: take an av_frame_clone() of the
     // decoder's most recent AVFrame, drop the previous slot, and
-    // hand the render thread a real FFmpeg ref. SDL upload reads
-    // frame->data[i] / frame->linesize[i] directly so the YUV
-    // planes never get memcpy'd between decode and upload (Codex
-    // recommended optim — saves one full memcpy of the planes per
-    // frame on the hot path). Single-slot semantics: if the render
-    // thread hasn't consumed the previous frame yet, it's dropped
+    // hand the render thread a real FFmpeg ref. The render thread reads
+    // frame->data[i] / frame->linesize[i] directly for color-managed
+    // conversion, without a producer-side plane copy. Single-slot semantics:
+    // if the render thread hasn't consumed the previous frame yet, it's dropped
     // (latest-wins) so no backlog accumulates if the GPU is slow.
     // Thread-safe.
     void push_avframe(const AVFrame* src, int64_t origin_ns = 0);

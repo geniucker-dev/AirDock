@@ -38,7 +38,7 @@ native Windows stack — no Bonjour SDK, no Apple runtime dependency.
 | **AES-CTR on H.264 NALs (in-place decrypt)** | OK    | `lib/mirror_buffer.c`                         |
 | **Split NAL + Annex-B conversion**           | OK    | `raop_rtp_mirror_thread` (port-by-port)       |
 | **H.264 decoder (libavcodec)**               | OK    | FFmpeg — SPS/PPS extracted from avcC          |
-| **Real-time video renderer (SDL2)**          | OK    | SDL2 IYUV texture, GPU YUV->RGB               |
+| **Real-time video renderer (SDL2)**          | OK    | Range/matrix-aware YUV->RGB, GPU scaling      |
 | **Audio UDP RTP + AES-CBC decrypt**          | OK    | `lib/raop_buffer.c`                           |
 | **RAOP RTP seq dedup**                       | OK    | 65k bitset, sliding window                    |
 | **AAC-ELD decoder (libavcodec)**             | OK    | ASC `F8 E8 50 00` built from scratch          |
