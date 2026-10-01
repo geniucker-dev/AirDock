@@ -579,6 +579,11 @@ bool H264Decoder::decode(const uint8_t* nal_data, std::size_t nal_size,
             LOG_WARN << "H264Decoder: hwframe_transfer_data failed " << err;
             return false;
         }
+        // av_hwframe_transfer_data() moves pixels, but colour range/matrix
+        // metadata is not guaranteed to follow on every FFmpeg backend.
+        // Preserve it so the renderer can select the matching YUV conversion
+        // instead of treating limited-range NV12 as full-range.
+        av_frame_copy_props(impl_->sw_frame, impl_->frame);
         // The transferred sw_frame is the source of truth for HW
         // decode; expose its NV12 planes via last_frame_nv12().
         impl_->last_is_yuv420 = false;

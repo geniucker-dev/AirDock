@@ -53,6 +53,19 @@ constexpr int kOptionsWidth     = 380;
 constexpr int kStatusBarHeight  = 28;
 constexpr int kToolbarHeight    = 40;
 
+int sws_colorspace_for_frame(const AVFrame* frame) {
+    if (!frame) return SWS_CS_ITU709;
+    switch (frame->colorspace) {
+        case AVCOL_SPC_FCC:       return SWS_CS_FCC;
+        case AVCOL_SPC_BT470BG:
+        case AVCOL_SPC_SMPTE170M: return SWS_CS_ITU601;
+        case AVCOL_SPC_SMPTE240M: return SWS_CS_SMPTE240M;
+        case AVCOL_SPC_BT2020_NCL:
+        case AVCOL_SPC_BT2020_CL: return SWS_CS_BT2020;
+        default:                  return SWS_CS_ITU709;
+    }
+}
+
 #if defined(_WIN32)
 // Enable the Windows 11 Mica system backdrop on an SDL-owned window.
 // No-op on pre-Win11 hosts (DwmSetWindowAttribute silently ignores
@@ -754,17 +767,12 @@ void VideoRenderer::run(const std::string& title) {
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
 
 #if SDL_VERSION_ATLEAST(2, 0, 8)
-    // iOS screen mirroring is full-range YCbCr (UxPlay reports AirPlay's
-    // colorimetry as range=0..255, BT.709 matrix, sRGB transfer).  SDL2's
-    // automatic mode assumes studio/limited range for IYUV and NV12 video;
-    // expanding an already-full-range phone frame makes icons and highlights
-    // clip, which looks much like incorrectly displayed HDR. JPEG is the only
-    // SDL2 conversion mode that preserves full-range samples (despite its
-    // historical name), and applies to both IYUV and NV12 textures. SDL2 does
-    // not expose separate range and matrix controls; SDL3 should use explicit
-    // colorspace properties when this renderer is migrated.
-    SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_JPEG);
-    LOG_INFO << "VideoRenderer YUV conversion: full range (AirPlay/sRGB)";
+    // This applies only to plane-buffer video (currently HLS). AirPlay mirror
+    // AVFrames are converted explicitly below because SDL2 cannot express
+    // Apple's full-range BT.709 combination: its only full-range mode, JPEG,
+    // uses a BT.601 matrix and was the reason the earlier fix looked unchanged.
+    SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_BT709);
+    LOG_INFO << "VideoRenderer HLS YUV conversion: video-range BT.709";
 #endif
 
     SDL_Window*   window   = SDL_CreateWindow(
@@ -812,7 +820,9 @@ void VideoRenderer::run(const std::string& title) {
 
     SDL_Texture* video_tex = nullptr;
     int          video_tex_w = 0, video_tex_h = 0;
-    Uint32       video_tex_fmt = 0;  // SDL_PIXELFORMAT_IYUV or SDL_PIXELFORMAT_NV12
+    Uint32       video_tex_fmt = 0;  // IYUV/NV12 for HLS, BGRA for mirroring
+    SwsContext*  mirror_sws = nullptr;
+    std::vector<uint8_t> mirror_bgra;
 
     SDL_Texture* cover_tex = nullptr;
     int          cover_tex_w = 0, cover_tex_h = 0;
@@ -1142,11 +1152,10 @@ void VideoRenderer::run(const std::string& title) {
         Uint32 desired_fmt = SDL_PIXELFORMAT_IYUV;
         AVFrame* af = avf_local.frame;
         if (have_avf && af) {
-            if (af->format == AV_PIX_FMT_NV12) {
-                desired_fmt = SDL_PIXELFORMAT_NV12;
-            } else {
-                desired_fmt = SDL_PIXELFORMAT_IYUV;
-            }
+            // SDL2 only offers full-range BT.601 (JPEG), never full-range
+            // BT.709. Convert mirror frames with libswscale so range and
+            // matrix can be specified independently.
+            desired_fmt = SDL_PIXELFORMAT_BGRA32;
         } else if (have_frame) {
             desired_fmt = have_nv12 ? SDL_PIXELFORMAT_NV12
                                     : SDL_PIXELFORMAT_IYUV;
@@ -1162,28 +1171,37 @@ void VideoRenderer::run(const std::string& title) {
                 video_tex_h   = h;
                 video_tex_fmt = desired_fmt;
                 LOG_INFO << "VideoRenderer texture ("
-                         << (desired_fmt == SDL_PIXELFORMAT_NV12 ? "NV12"
-                                                                 : "IYUV")
+                         << (desired_fmt == SDL_PIXELFORMAT_BGRA32 ? "BGRA"
+                             : desired_fmt == SDL_PIXELFORMAT_NV12 ? "NV12"
+                                                                   : "IYUV")
                          << ") created " << w << 'x' << h;
             }
             if (video_tex) {
                 if (have_avf && af) {
-                    // Direct upload from the refcounted AVFrame —
-                    // the planes never crossed our buffers, just
-                    // the FFmpeg pool → SDL staging texture.
-                    if (af->format == AV_PIX_FMT_NV12) {
-                        SDL_UpdateNVTexture(video_tex, nullptr,
-                            af->data[0], af->linesize[0],
-                            af->data[1], af->linesize[1]);
-                    } else {
-                        // YUV420P / YUVJ420P (full-range) — SDL
-                        // treats both as IYUV, slight color-range
-                        // bias on YUVJ but indistinguishable for
-                        // mirror.
-                        SDL_UpdateYUVTexture(video_tex, nullptr,
-                            af->data[0], af->linesize[0],
-                            af->data[1], af->linesize[1],
-                            af->data[2], af->linesize[2]);
+                    mirror_sws = sws_getCachedContext(
+                        mirror_sws, w, h,
+                        static_cast<AVPixelFormat>(af->format),
+                        w, h, AV_PIX_FMT_BGRA, SWS_FAST_BILINEAR,
+                        nullptr, nullptr, nullptr);
+                    if (mirror_sws) {
+                        const int cs = sws_colorspace_for_frame(af);
+                        const int* coeffs = sws_getCoefficients(cs);
+                        // Apple mirror frames are full-range when the VUI is
+                        // absent; honour an explicit MPEG/limited tag when one
+                        // is present. RGB output always spans the full range.
+                        const int src_range =
+                            af->color_range == AVCOL_RANGE_MPEG ? 0 : 1;
+                        sws_setColorspaceDetails(
+                            mirror_sws, coeffs, src_range, coeffs, 1,
+                            0, 1 << 16, 1 << 16);
+                        mirror_bgra.resize(
+                            static_cast<std::size_t>(w) * h * 4);
+                        uint8_t* dst[] = {mirror_bgra.data()};
+                        int dst_stride[] = {w * 4};
+                        sws_scale(mirror_sws, af->data, af->linesize,
+                                  0, h, dst, dst_stride);
+                        SDL_UpdateTexture(video_tex, nullptr,
+                                          mirror_bgra.data(), w * 4);
                     }
                 } else if (have_nv12) {
                     SDL_UpdateNVTexture(video_tex, nullptr,
@@ -2102,6 +2120,7 @@ void VideoRenderer::run(const std::string& title) {
     if (idle_ip_tex)   SDL_DestroyTexture(idle_ip_tex);
     if (idle_msg_tex)  SDL_DestroyTexture(idle_msg_tex);
     if (video_tex)     SDL_DestroyTexture(video_tex);
+    if (mirror_sws)    sws_freeContext(mirror_sws);
     if (cover_tex)     SDL_DestroyTexture(cover_tex);
     for (TTF_Font* f : fonts_big)   if (f) TTF_CloseFont(f);
     for (TTF_Font* f : fonts_small) if (f) TTF_CloseFont(f);
