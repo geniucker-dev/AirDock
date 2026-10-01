@@ -1,13 +1,12 @@
 name: Release
 
-# Builds the Windows binary on a GitHub-hosted Windows runner and
-# attaches a zipped Release/ folder to a draft GitHub Release.
+# Builds the Windows binary on a GitHub-hosted Windows runner and publishes
+# either a versioned release or a development prerelease.
 #
 # Triggers:
-#   - Push of a tag matching v* (e.g. v0.1.0): creates / updates the
-#     draft release for that tag with the artifact attached.
-#   - Manual workflow_dispatch from the Actions tab: builds the
-#     binary and uploads it as a workflow artifact only.
+#   - Push of a tag matching v* (e.g. v0.1.0): publishes a normal release.
+#   - Manual workflow_dispatch from the Actions tab: publishes a prerelease
+#     tagged dev-<run number>-<short SHA>.
 
 on:
   push:
@@ -59,28 +58,31 @@ jobs:
       - name: Package zip
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          if ([string]::IsNullOrEmpty($tag) -or $tag -eq "main") {
-            $tag = "dev-$($env:GITHUB_SHA.Substring(0,7))"
+          $shortSha = $env:GITHUB_SHA.Substring(0,7)
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "dev-${{ github.run_number }}-$shortSha"
+            $releaseName = "Development build $shortSha"
+            $prerelease = "true"
+          } else {
+            $tag = "${{ github.ref_name }}"
+            $releaseName = $tag
+            $prerelease = "false"
           }
           $zipName = "airplay-windows-$tag-x64.zip"
           Compress-Archive -Path build\Release\* -DestinationPath $zipName -Force
           "ZIP_PATH=$zipName" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "ZIP_NAME=$zipName" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_NAME=$releaseName" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "IS_PRERELEASE=$prerelease" | Out-File -FilePath $env:GITHUB_ENV -Append
           Get-ChildItem $zipName | Format-List Name, Length
 
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.ZIP_NAME }}
-          path: ${{ env.ZIP_PATH }}
-          retention-days: 30
-
-      - name: Create / update draft release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.ZIP_PATH }}
-          draft: true
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          draft: false
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           generate_release_notes: true
-          name: ${{ github.ref_name }}
+          name: ${{ env.RELEASE_NAME }}
