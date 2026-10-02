@@ -32,19 +32,21 @@ namespace ap::audio {
 // after each decrypt) so packets stay independent — trailing bytes that
 // don't fit into a full 16-byte block are copied unchanged.
 //
-// The decrypted payload is a codec frame (ALAC / AAC-ELD / AAC-LC
-// depending on the `ct` negotiated in SETUP). We don't decode yet: the
-// receiver just logs a hex dump of the first packet so the codec can be
-// identified by its signature, then counts packets for telemetry. The
-// full decode + playback path (FFmpeg → WASAPI) comes next.
+// The receiver reorders frames by RTP sequence number, asks the sender to
+// retransmit gaps on the negotiated control port, decrypts each frame, and
+// feeds ALAC / AAC-ELD / AAC-LC payloads to FFmpeg and SDL audio output.
 class AudioReceiver {
 public:
     struct Config {
         socket_t                    data_sock = INVALID_SOCK; // ownership transferred
+        socket_t                    control_sock = INVALID_SOCK; // ownership transferred
         std::vector<unsigned char>  aes_key;                   // 16 B
         std::vector<unsigned char>  aes_iv;                    // 16 B
         int                         ct          = 0;           // compression type
         int                         sample_rate = 44100;
+        int                         spf         = 0;           // samples per codec frame
+        std::string                 remote_ip;
+        uint16_t                    remote_control_port = 0;
         // Non-owning. When set, the receiver acts as a play/pause
         // watchdog: it pushes rate 1 on any RTP packet and rate 0 after
         // ~500 ms of silence. Apple Music and many iOS apps signal

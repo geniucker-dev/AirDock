@@ -2,10 +2,13 @@
 #include "log.h"
 #include "video/video_renderer.h"
 
+#include <array>
 #include <chrono>
-#include <cstdio>
 #include <cstring>
-#include <sstream>
+
+#if !defined(_WIN32)
+    #include <netdb.h>
+#endif
 
 #include <openssl/evp.h>
 
@@ -35,17 +38,6 @@ void set_recv_timeout(socket_t s, int ms) {
 #endif
 }
 
-std::string hex_dump(const unsigned char* b, std::size_t n, std::size_t max = 32) {
-    std::ostringstream os;
-    for (std::size_t i = 0; i < n && i < max; ++i) {
-        char tmp[4];
-        std::snprintf(tmp, sizeof(tmp), "%02x ", b[i]);
-        os << tmp;
-    }
-    if (n > max) os << "...(" << n << "B)";
-    return os.str();
-}
-
 } // namespace
 
 // RAOP compression-type values, from UxPlay/global.h and observed sessions.
@@ -65,14 +57,13 @@ AudioReceiver::AudioReceiver()  = default;
 AudioReceiver::~AudioReceiver() { stop(); }
 
 bool AudioReceiver::start(Config cfg) {
-    if (cfg.data_sock == INVALID_SOCK) return false;
-    if (cfg.aes_key.size() != 16 || cfg.aes_iv.size() != 16) {
+    cfg_ = std::move(cfg);
+    if (cfg_.data_sock == INVALID_SOCK) return false;
+    if (cfg_.aes_key.size() != 16 || cfg_.aes_iv.size() != 16) {
         LOG_ERROR << "AudioReceiver: aes_key/aes_iv must be 16 B "
-                  << "(got " << cfg.aes_key.size() << '/' << cfg.aes_iv.size() << ')';
+                  << "(got " << cfg_.aes_key.size() << '/' << cfg_.aes_iv.size() << ')';
         return false;
     }
-
-    cfg_ = std::move(cfg);
 
     aes_ctx_ = EVP_CIPHER_CTX_new();
     if (!aes_ctx_ ||
@@ -92,7 +83,11 @@ bool AudioReceiver::start(Config cfg) {
     dc.ct          = cfg_.ct;
     dc.sample_rate = cfg_.sample_rate;
     dc.channels    = 2;
-    dc.spf         = 480;   // observed frame cadence in logs; 512 also seen
+    // AirPlay advertises the AAC-ELD frame length in SETUP. Feeding FFmpeg
+    // an ASC for 480 samples when the sender actually uses 512 makes frames
+    // intermittently fail to decode. Older clients may omit it, in which
+    // case 480 is the commonly observed default.
+    dc.spf         = cfg_.spf == 512 ? 512 : 480;
     if (!decoder_->init(dc)) {
         LOG_WARN << "AudioReceiver: AAC decoder init failed — running in "
                     "decrypt-only mode";
@@ -125,11 +120,15 @@ void AudioReceiver::set_volume_db(float db) {
 }
 
 void AudioReceiver::stop() {
-    if (!running_.exchange(false)) return;
+    running_.store(false);
 
     if (cfg_.data_sock != INVALID_SOCK) {
         ap::net::close_socket(cfg_.data_sock);
         cfg_.data_sock = INVALID_SOCK;
+    }
+    if (cfg_.control_sock != INVALID_SOCK) {
+        ap::net::close_socket(cfg_.control_sock);
+        cfg_.control_sock = INVALID_SOCK;
     }
     if (thread_.joinable()) thread_.join();
 
@@ -143,197 +142,253 @@ void AudioReceiver::stop() {
 }
 
 void AudioReceiver::thread_fn() {
-    unsigned char buf[4096];
-    unsigned char cleartext[4096];
-    uint64_t pkts            = 0;
-    uint64_t dedup_dropped   = 0;
-    uint64_t total_bytes     = 0;
-    uint64_t hist_0_16 = 0, hist_17_64 = 0, hist_65_256 = 0,
-             hist_257_512 = 0, hist_513_plus = 0;
-    int big_pkts_logged = 0;
+    struct BufferedPacket {
+        bool filled = false;
+        uint16_t seq = 0;
+        uint32_t timestamp = 0;
+        std::vector<unsigned char> payload;
+    };
 
-    // RAOP retransmits lost packets; iOS typically sends each seq 2-3 times
-    // for resilience. We keep a bitset of recently-seen seqs so the decoder
-    // only sees each audio frame once. seq is 16-bit — we use a 65 536-bit
-    // bitset via a boolean vector (8 KB).
-    std::vector<bool> seen_seq(65536, false);
-
-    // Silence watchdog: any valid RTP packet pushes the renderer to
-    // "playing"; going idle for more than kSilencePauseMs pushes it to
-    // "paused". The rate=1 push is UNCONDITIONAL on each packet — other
-    // paths (FLUSH, POST /rate, text/parameters rate:) may have set
-    // playing=false without telling us, and push_playback_rate is a
-    // cheap atomic exchange that no-ops when the state already matches.
-    // Without the unconditional push, a tentative FLUSH that arrives
-    // during active playback would leave the overlay stuck until the
-    // user manually pauses+resumes.
+    constexpr std::size_t kReorderSlots = 256;
+    constexpr auto kResendRetry = std::chrono::milliseconds(10);
+    constexpr auto kGapDeadline = std::chrono::milliseconds(30);
     constexpr int kSilencePauseMs = 500;
+    constexpr unsigned char kNoDataMarker[4] = {0x00, 0x68, 0x34, 0x00};
+
+    std::array<BufferedPacket, kReorderSlots> reorder{};
+    bool have_expected = false;
+    uint16_t expected_seq = 0;
+    uint16_t highest_seq = 0;
+    uint16_t control_seq = 0;
+    uint64_t pkts = 0, dedup_dropped = 0, resend_requests = 0;
+    uint64_t missing_skipped = 0, total_bytes = 0;
+    bool gap_active = false;
+    uint16_t gap_seq = 0;
+    std::chrono::steady_clock::time_point gap_started{};
+    std::chrono::steady_clock::time_point last_resend{};
     auto last_packet = std::chrono::steady_clock::now();
-    // Arm the silence watchdog only after we've seen at least one real
-    // audio packet. Otherwise, a fresh mirror session that starts with
-    // iOS's keepalive-only dribble (sub-100B packets) would flip the
-    // renderer to rate=0 within 500ms and paint a pause badge over the
-    // first video frame, even though the iPhone is actively playing.
     bool audio_ever_seen = false;
 
-    while (running_.load()) {
-        int n = ::recvfrom(cfg_.data_sock,
-                           reinterpret_cast<char*>(buf), sizeof(buf), 0,
-                           nullptr, nullptr);
-        if (n < 0) {
-            if (cfg_.renderer && audio_ever_seen) {
-                const auto idle = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - last_packet).count();
-                if (idle >= kSilencePauseMs) {
-                    cfg_.renderer->push_playback_rate(0.0f);
+    sockaddr_storage remote_control{};
+    socklen_t remote_control_len = 0;
+    if (cfg_.control_sock != INVALID_SOCK && cfg_.remote_control_port != 0 &&
+        !cfg_.remote_ip.empty()) {
+        sockaddr_storage local{};
+#if defined(_WIN32)
+        int local_len = sizeof(local);
+#else
+        socklen_t local_len = sizeof(local);
+#endif
+        ::getsockname(cfg_.control_sock, reinterpret_cast<sockaddr*>(&local),
+                      &local_len);
+        addrinfo hints{};
+        hints.ai_family = local.ss_family;
+        hints.ai_socktype = SOCK_DGRAM;
+        hints.ai_flags = AI_NUMERICSERV;
+#if defined(AI_V4MAPPED)
+        if (hints.ai_family == AF_INET6) hints.ai_flags |= AI_V4MAPPED;
+#endif
+        addrinfo* result = nullptr;
+        const std::string port = std::to_string(cfg_.remote_control_port);
+        if (::getaddrinfo(cfg_.remote_ip.c_str(), port.c_str(), &hints,
+                          &result) == 0 && result) {
+            remote_control_len = static_cast<socklen_t>(result->ai_addrlen);
+            std::memcpy(&remote_control, result->ai_addr, result->ai_addrlen);
+        } else {
+            LOG_WARN << "AudioReceiver: cannot resolve remote control endpoint "
+                     << cfg_.remote_ip << ':' << cfg_.remote_control_port;
+        }
+        if (result) ::freeaddrinfo(result);
+    }
+
+    auto request_resend = [&](uint16_t first, uint16_t count) {
+        if (!count || !remote_control_len) return;
+        unsigned char request[8] = {
+            0x80, 0xd5,
+            static_cast<unsigned char>(control_seq >> 8),
+            static_cast<unsigned char>(control_seq),
+            static_cast<unsigned char>(first >> 8),
+            static_cast<unsigned char>(first),
+            static_cast<unsigned char>(count >> 8),
+            static_cast<unsigned char>(count)};
+        ++control_seq;
+        if (::sendto(cfg_.control_sock, reinterpret_cast<const char*>(request),
+                     sizeof(request), 0,
+                     reinterpret_cast<const sockaddr*>(&remote_control),
+                     remote_control_len) >= 0) {
+            ++resend_requests;
+        }
+    };
+
+    auto decode_packet = [&](BufferedPacket& packet) {
+        if (!decoder_) return;
+        const int got = decoder_->decode(packet.payload.data(),
+                                         static_cast<int>(packet.payload.size()));
+        if (got <= 0) return;
+        int16_t pcm[8192];
+        int have = 0;
+        while ((have = decoder_->pull_pcm_s16(
+                    pcm, static_cast<int>(sizeof(pcm) / sizeof(pcm[0])))) > 0) {
+            if (cfg_.renderer)
+                cfg_.renderer->push_audio_pcm(pcm, have, cfg_.sample_rate, 2);
+            if (output_) output_->push(pcm, have);
+        }
+    };
+
+    auto conceal_missing_frame = [&] {
+        const int frames = cfg_.spf > 0 ? cfg_.spf : (cfg_.ct == 2 ? 352 : 480);
+        std::vector<int16_t> silence(static_cast<std::size_t>(frames) * 2, 0);
+        if (cfg_.renderer)
+            cfg_.renderer->push_audio_pcm(silence.data(),
+                                          static_cast<int>(silence.size()),
+                                          cfg_.sample_rate, 2);
+        if (output_) output_->push(silence.data(), static_cast<int>(silence.size()));
+    };
+
+    auto drain = [&] {
+        while (have_expected) {
+            BufferedPacket& entry = reorder[expected_seq % kReorderSlots];
+            if (entry.filled && entry.seq == expected_seq) {
+                decode_packet(entry);
+                entry.payload.clear();
+                entry.filled = false;
+                ++expected_seq;
+                gap_active = false;
+                continue;
+            }
+            const uint16_t distance = static_cast<uint16_t>(highest_seq - expected_seq);
+            if (distance == 0 || distance >= kReorderSlots) {
+                gap_active = false;
+                break;
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (!gap_active || gap_seq != expected_seq) {
+                gap_active = true;
+                gap_seq = expected_seq;
+                gap_started = now;
+                last_resend = now - kResendRetry;
+            }
+            if (now - last_resend >= kResendRetry) {
+                uint16_t count = 0;
+                while (count < distance) {
+                    const uint16_t candidate_seq =
+                        static_cast<uint16_t>(expected_seq + count);
+                    const auto& candidate = reorder[candidate_seq % kReorderSlots];
+                    if (candidate.filled && candidate.seq == candidate_seq) break;
+                    ++count;
                 }
+                request_resend(expected_seq, count);
+                last_resend = now;
             }
-            continue;
+            if (now - gap_started < kGapDeadline) break;
+
+            LOG_WARN << "audio packet " << expected_seq
+                     << " was not recovered within " << kGapDeadline.count()
+                     << " ms; inserting one silent frame";
+            conceal_missing_frame();
+            ++missing_skipped;
+            ++expected_seq;
+            gap_active = false;
         }
-        if (n < 12) continue;   // RTP header minimum
+    };
 
-        // Only count substantial packets (real audio) as proof of
-        // active playback. During pause iOS keeps dribbling small
-        // keepalive / silence-frame packets (observed around 32 B
-        // payload) at the normal packet rate — they used to keep
-        // resetting the silence watchdog and flipping rate back to 1.
-        // Real AAC-ELD / ALAC audio frames are 400+ bytes once any
-        // musical content is present, so a 100-byte threshold separates
-        // the two cleanly.
-        constexpr int kAudioPacketMinBytes = 100;
-        if (n >= kAudioPacketMinBytes) {
-            last_packet = std::chrono::steady_clock::now();
-            audio_ever_seen = true;
-            // Suppress rate=1 during the post-FLUSH grace window: iOS
-            // still drains its buffer with real audio for a few hundred
-            // ms after a real pause FLUSH.
-            if (cfg_.renderer && !cfg_.renderer->in_flush_grace()) {
-                cfg_.renderer->push_playback_rate(1.0f);
-            }
-        }
-
-        // Parse RTP header (RFC 3550, 12-byte fixed part).
-        const uint8_t  pt  =  buf[1] & 0x7f;
-        const uint16_t seq = (static_cast<uint16_t>(buf[2]) << 8) | buf[3];
-        const uint32_t ts  = (static_cast<uint32_t>(buf[4]) << 24)
-                           | (static_cast<uint32_t>(buf[5]) << 16)
-                           | (static_cast<uint32_t>(buf[6]) <<  8)
-                           |  static_cast<uint32_t>(buf[7]);
-
-        const int payload_len   = n - 12;
-        const int encrypted_len = (payload_len / 16) * 16;
-        const int tail_len      = payload_len - encrypted_len;
-
-        // Reset IV before decrypting each packet — UxPlay does the same
-        // via aes_cbc_reset(). The aes_iv from SETUP is therefore used
-        // as the IV of every packet (packets are independent).
-        EVP_DecryptInit_ex(aes_ctx_, nullptr, nullptr, nullptr,
-                           cfg_.aes_iv.data());
-        int outlen = 0;
-        if (encrypted_len > 0) {
-            EVP_DecryptUpdate(aes_ctx_, cleartext, &outlen,
-                              buf + 12, encrypted_len);
-        }
-        if (tail_len > 0) {
-            std::memcpy(cleartext + outlen, buf + 12 + encrypted_len,
-                        static_cast<std::size_t>(tail_len));
-            outlen += tail_len;
-        }
-
+    auto enqueue = [&](const unsigned char* packet, int n) {
+        if (n < 12 || (packet[1] & 0x7f) != 96) return;
+        const uint16_t seq = (static_cast<uint16_t>(packet[2]) << 8) | packet[3];
+        const uint32_t ts = (static_cast<uint32_t>(packet[4]) << 24) |
+                            (static_cast<uint32_t>(packet[5]) << 16) |
+                            (static_cast<uint32_t>(packet[6]) << 8) | packet[7];
+        const int payload_len = n - 12;
         ++pkts;
         total_bytes += static_cast<uint64_t>(payload_len);
 
-        if (payload_len <=  16)      ++hist_0_16;
-        else if (payload_len <=  64) ++hist_17_64;
-        else if (payload_len <= 256) ++hist_65_256;
-        else if (payload_len <= 512) ++hist_257_512;
-        else                         ++hist_513_plus;
+        if (payload_len == 0 ||
+            (payload_len == 4 && std::memcmp(packet + 12, kNoDataMarker, 4) == 0) ||
+            (cfg_.ct == 2 && payload_len == 32)) return;
 
-        // Dedup only the "big enough to be real audio" packets — the dwarf
-        // sync packets (4 B) are not audio frames, they come with their own
-        // overlapping seq values we don't want to blacklist.
-        const bool real_audio = (payload_len >= 100);
-        bool is_duplicate     = false;
-        if (real_audio) {
-            if (seen_seq[seq]) {
-                is_duplicate = true;
-                ++dedup_dropped;
-            } else {
-                seen_seq[seq] = true;
-                // Clear a sliding 8k-wide window behind the new seq so the
-                // bitset doesn't stay full forever once we wrap past 65k.
-                const uint16_t erase_from = static_cast<uint16_t>(seq - 8192);
-                // erase a small contiguous region every 1024 packets to cap
-                // the work per packet.
-                if ((pkts & 0x3ff) == 0) {
-                    for (int k = 0; k < 1024; ++k) {
-                        seen_seq[static_cast<uint16_t>(erase_from + k)] = false;
-                    }
-                }
+        if (n >= 100) {
+            last_packet = std::chrono::steady_clock::now();
+            audio_ever_seen = true;
+            if (cfg_.renderer && !cfg_.renderer->in_flush_grace())
+                cfg_.renderer->push_playback_rate(1.0f);
+        }
+
+        if (!have_expected) {
+            expected_seq = highest_seq = seq;
+            have_expected = true;
+        } else {
+            const int16_t relative = static_cast<int16_t>(seq - expected_seq);
+            if (relative < 0) { ++dedup_dropped; return; }
+            if (relative >= static_cast<int>(kReorderSlots)) {
+                LOG_WARN << "audio sequence jumped beyond reorder window; resynchronizing";
+                for (auto& old : reorder) { old.filled = false; old.payload.clear(); }
+                expected_seq = highest_seq = seq;
+            } else if (static_cast<int16_t>(seq - highest_seq) > 0) {
+                highest_seq = seq;
             }
         }
 
-        // Verbose log for the first couple of everything, AND for the first
-        // 5 non-duplicate "big enough to be real audio" packets. That's
-        // where the codec signature lives.
-        const bool first_any = (pkts <= 2);
-        const bool first_big = (real_audio && !is_duplicate && big_pkts_logged < 5);
-        if (first_any || first_big) {
-            LOG_INFO << "audio pkt#" << pkts << ": pt=" << static_cast<int>(pt)
-                     << " seq=" << seq << " ts=" << ts
-                     << " paylen=" << payload_len
-                     << " (enc=" << encrypted_len << " tail=" << tail_len
-                     << (is_duplicate ? " DUP" : "") << ')';
-            LOG_INFO << "  clear: " << hex_dump(cleartext,
-                                                static_cast<std::size_t>(outlen));
-            if (first_big) ++big_pkts_logged;
+        BufferedPacket& entry = reorder[seq % kReorderSlots];
+        if (entry.filled && entry.seq == seq) { ++dedup_dropped; return; }
+
+        const int encrypted_len = (payload_len / 16) * 16;
+        entry.payload.resize(static_cast<std::size_t>(payload_len));
+        EVP_DecryptInit_ex(aes_ctx_, nullptr, nullptr, nullptr, cfg_.aes_iv.data());
+        int outlen = 0;
+        if (encrypted_len)
+            EVP_DecryptUpdate(aes_ctx_, entry.payload.data(), &outlen,
+                              packet + 12, encrypted_len);
+        if (payload_len > encrypted_len)
+            std::memcpy(entry.payload.data() + outlen, packet + 12 + encrypted_len,
+                        static_cast<std::size_t>(payload_len - encrypted_len));
+        entry.seq = seq;
+        entry.timestamp = ts;
+        entry.filled = true;
+        drain();
+    };
+
+    unsigned char buf[4096];
+    while (running_.load()) {
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(cfg_.data_sock, &readfds);
+        socket_t maxfd = cfg_.data_sock;
+        if (cfg_.control_sock != INVALID_SOCK) {
+            FD_SET(cfg_.control_sock, &readfds);
+            if (cfg_.control_sock > maxfd) maxfd = cfg_.control_sock;
         }
-
-        // Feed the real-audio (non-duplicate) frames to the AAC decoder,
-        // then immediately drain any PCM it produced into the SDL sink.
-        if (real_audio && !is_duplicate && decoder_) {
-            int got = decoder_->decode(cleartext, outlen);
-            if (got > 0 && decoder_->frames_decoded() <= 3) {
-                LOG_INFO << "  decoded " << got << " samples (" << got / 2
-                         << " per channel) — total PCM frames out: "
-                         << decoder_->frames_decoded();
-            }
-
-            if (got > 0) {
-                // Drain every available PCM sample from the decoder's
-                // queue into SDL. We do it in one pull — buffer is large
-                // enough for the ~1920 stereo samples of a single AAC-ELD
-                // frame at 480 spf.
-                int16_t pcm[8192];
-                int     have = 0;
-                while ((have = decoder_->pull_pcm_s16(
-                            pcm, static_cast<int>(sizeof(pcm) / sizeof(pcm[0])))) > 0) {
-                    if (cfg_.renderer) {
-                        cfg_.renderer->push_audio_pcm(
-                            pcm, have, cfg_.sample_rate, 2);
-                    }
-                    if (output_) output_->push(pcm, have);
-                }
-            }
+        timeval timeout{0, 5000};
+        const int ready = ::select(static_cast<int>(maxfd + 1), &readfds,
+                                   nullptr, nullptr, &timeout);
+        if (ready > 0 && FD_ISSET(cfg_.data_sock, &readfds)) {
+            const int n = ::recvfrom(cfg_.data_sock, reinterpret_cast<char*>(buf),
+                                     sizeof(buf), 0, nullptr, nullptr);
+            if (n > 0) enqueue(buf, n);
         }
-
-        if ((pkts % 500) == 0) {
-            LOG_INFO << "audio: " << pkts << " pkts, "
-                     << (total_bytes / 1024) << " KB received";
+        if (ready > 0 && cfg_.control_sock != INVALID_SOCK &&
+            FD_ISSET(cfg_.control_sock, &readfds)) {
+            const int n = ::recvfrom(cfg_.control_sock, reinterpret_cast<char*>(buf),
+                                     sizeof(buf), 0, nullptr, nullptr);
+            if (n >= 16 && (buf[1] & 0x7f) == 0x56) enqueue(buf + 4, n - 4);
+        }
+        // A missing packet may never cause another socket event. Drive resend
+        // retries and the bounded concealment deadline from the poll timeout.
+        drain();
+        if (cfg_.renderer && audio_ever_seen &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - last_packet).count() >=
+                kSilencePauseMs) {
+            cfg_.renderer->push_playback_rate(0.0f);
         }
     }
 
-    LOG_INFO << "AudioReceiver stopped (" << pkts << " pkts, "
-             << total_bytes << " payload bytes, "
-             << dedup_dropped << " duplicate audio frames dropped, "
+    LOG_INFO << "AudioReceiver stopped (" << pkts << " packets, "
+             << total_bytes << " payload bytes, " << dedup_dropped
+             << " duplicates, " << resend_requests << " resend requests, "
+             << missing_skipped << " missing frames skipped, "
              << (decoder_ ? decoder_->frames_decoded() : 0)
              << " PCM frames decoded)";
-    LOG_INFO << "  payload size histogram: "
-             << "[0..16]="      << hist_0_16
-             << "  [17..64]="   << hist_17_64
-             << "  [65..256]="  << hist_65_256
-             << "  [257..512]=" << hist_257_512
-             << "  [513+]="     << hist_513_plus;
 }
 
 } // namespace ap::audio
