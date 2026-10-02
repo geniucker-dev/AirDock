@@ -424,6 +424,10 @@ Response setup_airplay2_path(ClientSession& session, const Request& req) {
             opts.stream_connection_id = parsed.streams[i].stream_conn_id;
             opts.ct                   = parsed.streams[i].ct;
             opts.sample_rate          = 44100;  // TODO: parse from SETUP when != 44.1k
+            opts.spf                  = parsed.streams[i].spf;
+            opts.remote_ip            = session.remote_ip;
+            opts.remote_control_port  = static_cast<uint16_t>(
+                parsed.streams[i].remote_control_port);
             // Prefer the live UI toggle when available; the static
             // session.mirror_hwaccel (seeded from the CLI flag) is
             // the headless fallback.

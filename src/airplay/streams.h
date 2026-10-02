@@ -67,6 +67,9 @@ public:
         uint64_t                   stream_connection_id = 0;
         int                        ct          = 0;
         int                        sample_rate = 44100;
+        int                        spf         = 0;
+        std::string                remote_ip;
+        uint16_t                   remote_control_port = 0;
         bool                       mirror_hwaccel = false;
     };
 

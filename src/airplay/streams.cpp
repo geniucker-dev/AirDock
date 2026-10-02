@@ -226,27 +226,29 @@ bool StreamSession::setup_stream(int type,
         audio_ = std::make_unique<ap::audio::AudioReceiver>();
         ap::audio::AudioReceiver::Config ac;
         ac.data_sock   = d_sock;
+        ac.control_sock = c_sock;
         ac.aes_key     = opts.aes_key;
         ac.aes_iv      = opts.aes_iv;
         ac.ct          = opts.ct;
         ac.sample_rate = opts.sample_rate;
+        ac.spf         = opts.spf;
+        ac.remote_ip   = opts.remote_ip;
+        ac.remote_control_port = opts.remote_control_port;
         ac.renderer    = renderer_;
         if (!audio_->start(std::move(ac))) {
             LOG_WARN << "SETUP stream 96: AudioReceiver failed to start "
-                        "(UDP socket left bound, no decrypt)";
-            // If start() failed before taking ownership, we close the sock here.
-            ap::net::close_socket(d_sock);
+                        "(UDP sockets closed, no decrypt)";
             audio_.reset();
         }
 
-        // Control socket: iOS sends retransmit/feedback packets here; we
-        // just keep it bound so iOS isn't flooded with ICMP unreachables.
+        // Both sockets are consumed by AudioReceiver. The control socket is
+        // used for loss-recovery requests and incoming retransmitted packets.
         StreamChannel ch;
         ch.type         = type;
         ch.data_port    = d_port;
         ch.control_port = c_port;
-        ch.data_sock    = INVALID_SOCK;   // consumed by AudioReceiver
-        ch.control_sock = c_sock;
+        ch.data_sock    = INVALID_SOCK;
+        ch.control_sock = INVALID_SOCK;
         channels_.push_back(ch);
         return true;
     }
