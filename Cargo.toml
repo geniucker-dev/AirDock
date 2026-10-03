@@ -1,0 +1,78 @@
+[package]
+name = "airplay-windows"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-only"
+description = "Native AirPlay receiver with a Slint desktop interface"
+build = "build.rs"
+
+[lib]
+path = "rust/src/lib.rs"
+
+[[bin]]
+name = "airplay-windows"
+path = "rust/src/main.rs"
+
+[[example]]
+name = "fairplay_vectors"
+path = "rust/examples/fairplay_vectors.rs"
+
+[[example]]
+name = "media_verify"
+path = "rust/examples/media_verify.rs"
+
+[[example]]
+name = "core_bench"
+path = "rust/examples/core_bench.rs"
+
+[dependencies]
+anyhow = "1"
+aes = "0.8"
+base64 = "0.22"
+cbc = "0.1"
+clap = { version = "4", features = ["derive"] }
+ctr = "0.9"
+directories = "6"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
+fs2 = "0.4"
+hex = "0.4"
+if-addrs = "0.14"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Custom SDL platform: enable the built-in widget image loader without a second window backend.
+i-slint-core = { version = "=1.18.1", default-features = false, features = ["image-decoders", "svg"] }
+libc = "0.2"
+mdns-sd = "0.17"
+plist = "1"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+slint = { version = "=1.18.1", default-features = false, features = ["std", "renderer-software", "compat-1-2"] }
+socket2 = { version = "0.6", features = ["all"] }
+polling = "3"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+url = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+
+[target.'cfg(windows)'.dependencies]
+sdl2 = { version = "0.38", features = ["use-vcpkg"] }
+tray-icon = "0.21"
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_System_Com", "Win32_Storage_FileSystem", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_Console", "Win32_Devices_DeviceAndDriverInstallation", "Win32_NetworkManagement_Dns", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock"] }
+winreg = "0.55"
+
+[target.'cfg(not(windows))'.dependencies]
+sdl2 = { version = "0.38", features = ["use-pkgconfig"] }
+
+[build-dependencies]
+slint-build = "=1.18.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

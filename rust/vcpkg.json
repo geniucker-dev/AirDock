@@ -1,0 +1,13 @@
+{
+  "name": "airplay-windows-rust-native",
+  "version-string": "0.2.0",
+  "dependencies": [
+    {
+      "name": "ffmpeg",
+      "default-features": false,
+      "features": ["avcodec", "avformat", "avdevice", "swscale", "swresample", "nvcodec", "amf", "x264", "x265", "ffmpeg", "ffprobe"]
+    },
+    "sdl2"
+  ],
+  "builtin-baseline": "9bdf622306cc71f2e605154578976af66c59af43"
+}

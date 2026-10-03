@@ -1,0 +1,3 @@
+# Protocol tables and codec fixtures must keep exact bytes on Windows too.
+*.bin binary
+*.png binary

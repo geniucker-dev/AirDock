@@ -1,3 +1,30 @@
+# Rust branch additions
+
+The Rust receiver does not link the C++ application or its OpenSSL/libplist/
+ImGui/SDL_ttf dependencies described below. Those notices remain applicable to
+reference sources and independent test oracles retained in this repository.
+
+- **Slint 1.18.1**: GPL-3.0-only / commercial / Slint Royalty-free options;
+  this GPL application uses the GPL option. https://slint.dev/
+- **Rust PlayFair port and data**: derived from nored/airfry's Rust port of
+  doubletake's PlayFair implementation, MIT. The original license and attribution
+  are retained in `rust/src/playfair_data/AIRFRY-LICENSE.txt` and `NOTICE.md`.
+  The implementation is independently compared against the bundled C oracle;
+  its promoted 8-bit rotation semantics have been corrected to match that oracle.
+  https://github.com/nored/airfry
+- **Rust dependencies**: exact versions are locked in Cargo.lock. Distribution
+  artifacts include their license texts and an SPDX/repository index generated
+  from the locked Cargo source metadata (`rust-licenses/index.json`).
+- **Native FFmpeg distribution**: the Rust Windows manifest enables x264/x265;
+  those build components make the distributed FFmpeg GPL rather than a
+  minimal LGPL-only build. The package includes vcpkg dependency copyright and
+  license files. FFmpeg: https://ffmpeg.org/ ; x264: https://www.videolan.org/developers/x264.html ;
+  x265: https://www.videolan.org/developers/x265.html .
+- **SDL2**: zlib license, https://www.libsdl.org/ . Used for media presentation,
+  audio and the native window hosting Slint's cached software-rendered UI.
+- **AAC-ELD fixture generator**: test-only FDK-AAC dependency; never linked into
+  the application. See `rust/tests/fixtures/README.md` for fixture provenance.
+
 # Third-Party Notices
 
 This project ships, links against, or fetches at build time the

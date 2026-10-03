@@ -1,4 +1,8 @@
 build/
+target/
+dist-rust/
+rust-validation/
+__pycache__/
 build_*/
 out/
 .vs/

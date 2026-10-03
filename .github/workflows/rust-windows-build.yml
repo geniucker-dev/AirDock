@@ -1,0 +1,112 @@
+name: Rust Windows build and verification
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      SDL_AUDIODRIVER: dummy
+      VCPKGRS_DYNAMIC: '1'
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+      LIBCLANG_PATH: 'C:\Program Files\LLVM\bin'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+          components: rustfmt, clippy
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-rust-native-v1
+      - name: Read native dependency baseline
+        id: baseline
+        shell: pwsh
+        run: |
+          $baseline = (Get-Content rust/vcpkg.json | ConvertFrom-Json).'builtin-baseline'
+          "sha=$baseline" >> $env:GITHUB_OUTPUT
+      - uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: ${{ steps.baseline.outputs.sha }}
+      - name: Install Rust native dependencies
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet x64-windows `
+            "--x-manifest-root=$pwd/rust" "--x-install-root=$pwd/rust/vcpkg_installed"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "VCPKG_INSTALLED_ROOT=$pwd/rust/vcpkg_installed" >> $env:GITHUB_ENV
+          "FFMPEG_DIR=$pwd/rust/vcpkg_installed/x64-windows" >> $env:GITHUB_ENV
+          "$pwd/rust/vcpkg_installed/x64-windows/bin" >> $env:GITHUB_PATH
+          "$pwd/rust/vcpkg_installed/x64-windows/debug/bin" >> $env:GITHUB_PATH
+          "$pwd/rust/vcpkg_installed/x64-windows/tools/ffmpeg" >> $env:GITHUB_PATH
+      - name: Formatting and lint
+        run: |
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --all-targets -- -D warnings
+      - name: Debug tests
+        run: cargo test --locked --all-targets
+      - name: Release tests and executable
+        run: |
+          cargo test --locked --release --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --release --bins --examples
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install cryptography
+      - name: Protocol and media integration
+        run: python tools/rust_integration.py --binary target/release/airplay-windows.exe
+      - name: Experimental HLS / FCUP integration
+        run: python tools/rust_hls_integration.py --binary target/release/airplay-windows.exe
+      - name: Compile the independent FairPlay reference
+        shell: pwsh
+        run: |
+          cl /nologo /O2 /Ithird_party/playfair rust/tests/playfair_reference.c `
+            third_party/playfair/playfair.c third_party/playfair/omg_hax.c `
+            third_party/playfair/hand_garble.c third_party/playfair/sap_hash.c `
+            third_party/playfair/modified_md5.c /Fe:target/playfair-reference.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/rust_fairplay_differential.py --reference target/playfair-reference.exe --rust target/release/examples/fairplay_vectors.exe
+      - name: Package executable, DLLs and notices
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-rust | Out-Null
+          Copy-Item target/release/airplay-windows.exe dist-rust/
+          Copy-Item rust/vcpkg_installed/x64-windows/bin/*.dll dist-rust/
+          $crt = Get-ChildItem "$env:VCToolsRedistDir/x64/Microsoft.VC*.CRT" -Directory | Select-Object -First 1
+          if (-not $crt) { throw "Visual C++ redistributable directory not found" }
+          Copy-Item "$($crt.FullName)/*.dll" dist-rust/
+          Copy-Item LICENSE,README.md,THIRD_PARTY_NOTICES.md,Cargo.lock dist-rust/
+          New-Item -ItemType Directory -Force dist-rust/docs | Out-Null
+          Copy-Item docs/RUST*.md,docs/CPP_REFERENCE_README.md dist-rust/docs/
+          Copy-Item -Recurse docs/validation dist-rust/docs/validation
+          Copy-Item rust/src/playfair_data/AIRFRY-LICENSE.txt dist-rust/
+          Copy-Item -Recurse rust/vcpkg_installed/x64-windows/share dist-rust/native-licenses
+          python tools/rust_dependency_licenses.py --output dist-rust/rust-licenses
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Content dist-rust/ACCEPTANCE_STATUS.txt 'Experimental Rust branch. Automated checks passed. Windows/iPhone hardware parity remains pending until the paired acceptance measurements in docs/RUST_ACCEPTANCE.md are recorded.'
+      - name: Verify packaged dependency resolution
+        shell: pwsh
+        run: |
+          $env:PATH = "$pwd/dist-rust;$env:SystemRoot/System32;$env:SystemRoot"
+          & "$pwd/dist-rust/airplay-windows.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: airplay-windows-rust-x64-${{ github.sha }}
+          path: dist-rust/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rust-windows-validation-${{ github.sha }}
+          path: rust-validation/
+          if-no-files-found: ignore
