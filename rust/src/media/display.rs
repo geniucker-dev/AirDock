@@ -50,7 +50,7 @@ impl Converter {
                 w as i32,
                 h as i32,
                 ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_BGRA,
-                ffmpeg::ffi::SWS_FAST_BILINEAR,
+                ffmpeg::software::scaling::Flags::FAST_BILINEAR.bits(),
                 ptr::null_mut(),
                 ptr::null_mut(),
                 ptr::null(),
