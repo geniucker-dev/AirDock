@@ -140,6 +140,8 @@ pub fn mirror(
                     // not the advertised listener. The sender can reconnect
                     // without another SETUP; each connection gets fresh CTR state.
                     let result = (|| -> Result<()> {
+                        // Windows inherits the listener's nonblocking mode.
+                        stream.set_nonblocking(false)?;
                         stream.set_read_timeout(Some(Duration::from_millis(100)))?;
                         stream.set_nodelay(true)?;
                         let mut cipher = crypto::mirror_cipher(&key, connection);

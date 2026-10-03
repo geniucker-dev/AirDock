@@ -13,6 +13,22 @@ import time
 import rust_integration as media
 
 
+def process_cpu_seconds(process):
+    if sys.platform == 'win32':
+        import ctypes
+        from ctypes import wintypes
+        get_times = ctypes.WinDLL('kernel32', use_last_error=True).GetProcessTimes
+        get_times.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        get_times.restype = wintypes.BOOL
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not get_times(int(process._handle), *(ctypes.byref(t) for t in times)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return sum((t.dwHighDateTime << 32) | t.dwLowDateTime for t in times[2:]) / 10000000
+    # Linux /proc CPU counters exclude the sender and other CI processes.
+    fields = pathlib.Path(f'/proc/{process.pid}/stat').read_text().rsplit(')', 1)[1].split()
+    return (int(fields[11]) + int(fields[12])) / os.sysconf('SC_CLK_TCK')
+
+
 def setup_keys(connection):
     encrypted, key = media.handshake(connection)
     body = plistlib.dumps({'ekey': encrypted, 'eiv': bytes(16)}, fmt=plistlib.FMT_BINARY)
@@ -37,10 +53,11 @@ def broken_connection(port, record, reset=True):
     time.sleep(.2)
 
 
-def wire_reconnects(port, paths):
+def wire_reconnects(port, paths, idle_check):
     checks = []
     connection = media.pair.Conn('127.0.0.1', port)
     try:
+        idle_check('control connection')
         key = setup_keys(connection)
         ids = [0, 123456, (1 << 63) - 1, 1 << 63, 0xfedcba9876543210, (1 << 64) - 1]
         for index, ident in enumerate(ids):
@@ -71,6 +88,8 @@ def wire_reconnects(port, paths):
         ident = 0xfedcba9876543210
         data_port = media.send_mirror(connection, key, [paths[0]], ident=ident)
         checks.append('first connection on advertised video port')
+        with socket.create_connection(('127.0.0.1', data_port), timeout=3):
+            idle_check('control and video connections')
         media.send_mirror(connection, key, [paths[1]], ident=ident, port=data_port)
         checks.append('clean EOF, reconnect to same video port')
         header = bytearray(128)
@@ -107,15 +126,26 @@ def main():
     env = os.environ.copy()
     env['SDL_AUDIODRIVER'] = 'dummy'
     port = 7013
+    idle_cpu = {}
     with (output / 'receiver.log').open('w') as log:
         process = subprocess.Popen([
             str(args.binary.resolve()), *([] if args.gui else ['--headless']),
             '--port', str(port), '--config-dir', str(config),
             '--metrics', str(output / 'metrics.json'), '--exit-after', '35',
         ], env=env, stdout=log, stderr=log)
+        def idle_check(label):
+            time.sleep(.1)  # Allow accept to finish before sampling.
+            before = process_cpu_seconds(process)
+            time.sleep(1)
+            used = process_cpu_seconds(process) - before
+            idle_cpu[label] = used
+            # No frames/requests are sent during this interval. Busy-polling one
+            # idle socket consumes about a full core, not these bounded wakeups.
+            if not args.gui:
+                assert used < .35, (label, 'idle CPU seconds over one second', used)
         try:
             media.wait_listener(port, process)
-            checks = wire_reconnects(port, paths)
+            checks = wire_reconnects(port, paths, idle_check)
         finally:
             try:
                 process.wait(timeout=40)
@@ -128,7 +158,8 @@ def main():
     assert metrics['decoded_frames'] == len(checks) * 30, (checks, metrics)
     if args.gui:
         assert metrics['presented_frames'] > 0 and metrics['p95_receive_to_present_us'] > 0, metrics
-    result = {'reconnect_checks': checks, 'metrics': metrics, 'hardware_parity': 'pending'}
+    result = {'reconnect_checks': checks, 'idle_cpu_seconds': idle_cpu,
+              'metrics': metrics, 'hardware_parity': 'pending'}
     (output / 'results.json').write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
 

@@ -422,6 +422,10 @@ impl Inner {
     }
 }
 fn serve(mut stream: TcpStream, inner: &Inner) -> Result<()> {
+    // Windows accepted sockets inherit the nonblocking listener's mode.
+    // Wait for the request (including fragments) instead of treating WouldBlock
+    // as an absent request and closing the connection.
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let req = Reader::default()
@@ -822,6 +826,42 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn proxy_accepts_delayed_fragmented_request_on_inherited_nonblocking_socket() {
+        let hls = Hls::new(Shared::new(Default::default())).unwrap();
+        let url = "mlhls://fixture/blob";
+        {
+            let mut s = hls.inner.session.lock().unwrap();
+            s.1.master = url.into();
+            s.1.put(
+                url.into(),
+                Reply {
+                    bytes: b"fixture data".to_vec(),
+                    redirect: String::new(),
+                    content_range: String::new(),
+                },
+            );
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let (accepted, _) = listener.accept().unwrap();
+        // Windows accept inherits the listener's nonblocking mode. Force that
+        // mode here too, so Linux tests cover arrival after accept and fragments.
+        accepted.set_nonblocking(true).unwrap();
+        let inner = hls.inner.clone();
+        let server = thread::spawn(move || serve(accepted, &inner));
+        thread::sleep(Duration::from_millis(50));
+        client.write_all(b"GET /master.m3u8 HTTP/1.1\r\n").unwrap();
+        thread::sleep(Duration::from_millis(30));
+        client.write_all(b"Host: localhost\r\n\r\n").unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        server.join().unwrap().unwrap();
+        assert!(response.ends_with("\r\n\r\nfixture data"));
+    }
     #[test]
     fn proxy_preserves_http_byte_ranges() {
         let upstream = TcpListener::bind("127.0.0.1:0").unwrap();

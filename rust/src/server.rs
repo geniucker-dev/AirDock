@@ -621,6 +621,9 @@ impl Drop for Session {
     }
 }
 fn connection(mut stream: TcpStream, peer: SocketAddr, id: u64, device: Arc<Device>) -> Result<()> {
+    // Accept inherits nonblocking mode on Windows; timeout-based reads must
+    // block between requests instead of spinning on WouldBlock.
+    stream.set_nonblocking(false)?;
     let peer = match peer {
         SocketAddr::V6(v6) => v6
             .ip()

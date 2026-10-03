@@ -8,7 +8,7 @@ feature or end-to-end performance parity.
 | Check | Result |
 | --- | --- |
 | Formatting and Clippy, all targets | Passed, warnings denied |
-| Debug and release unit tests | 25 passed in each profile |
+| Debug and release unit tests | 26 passed in each profile |
 | Pair verification and wire protocol | 26 independent Python checks passed |
 | PlayFair | 256 independent deterministic vectors, all four modes, identical to the bundled C oracle |
 | Encrypted mirroring | 120 H.264/HEVC frames decoded, including changes between landscape/portrait and between codecs on the same connection |
@@ -89,6 +89,16 @@ decode their 30 H.264/HEVC frames. Windows and Linux CI run this harness; Linux
 also runs it through Slint presentation. The local GUI run decoded 390 frames
 and presented 386, with four latest-frame replacements under synthetic load.
 These checks do not establish actual iPhone or high-resolution FPS parity.
+
+Windows accepted TCP sockets inherit the nonblocking listener's mode. Control,
+mirror and HLS proxy connections now explicitly use blocking reads with their
+existing timeouts. This prevents idle control/video threads spinning on
+`WouldBlock`, and prevents the proxy closing a connection before its HTTP
+request arrives. A regression forces the inherited nonblocking mode on Linux
+too, then sends a delayed, fragmented request; it fails before the correction.
+The wire harness also samples receiver process CPU while idle control/video
+connections remain open. Headless runs must use less than 0.35 CPU seconds per
+one-second interval; the local run used 0.01 seconds in each idle scenario.
 
 The complete native Windows build, pinned FFmpeg 8.1 linking, media checks,
 conversion performance gate and packaged DLL startup already passed in the
