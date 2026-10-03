@@ -130,9 +130,10 @@ manifest and required files; cache hits should not rebuild unchanged packages.
 
 Native dependencies are saved immediately after successful installation, before
 Rust lint/tests, so a later Rust failure does not discard them. Cargo dependency
-caches include the native manifest and compiler/SDK versions and are saved only
-after a successful job, so an early failure cannot freeze an incomplete set of
-compiled profiles under an immutable cache key. A cold build can still take around 30 minutes;
+caches include the native manifest and compiler/SDK versions. Once Debug and
+Release compilation both finish, they can be saved even if a later integration
+or packaging check fails; an early compile failure cannot freeze incomplete
+profiles under an immutable key. A cold build can still take around 30 minutes;
 Rust CI lets it finish instead of cancelling it with every new push. GitHub
 coalesces pending runs to the newest queued commit.
 

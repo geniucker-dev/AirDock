@@ -25,7 +25,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           # shared-key replaces key in rust-cache. Include the native manifest
-          # here and save only after all profiles finish, so an early failure
+          # here and enable saving only after all profiles finish, so an early failure
           # cannot permanently freeze a cache containing only Clippy output.
           shared-key: airplay-rust-windows-profiles-v1-${{ hashFiles('rust/vcpkg.json') }}
           env-vars: VCToolsVersion WindowsSDKVersion
@@ -96,6 +96,11 @@ jobs:
           cargo test --locked --release --all-targets
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked --release --bins --examples
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # All dependency profiles are complete now. Preserve them even if a
+          # later integration or packaging step fails; partial compilations
+          # must never freeze the immutable cache key.
+          "CACHE_ON_FAILURE=true" >> $env:GITHUB_ENV
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -143,8 +148,8 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "$pwd/dist-rust;$env:SystemRoot/System32;$env:SystemRoot"
-          & "$pwd/dist-rust/airplay-windows.exe" --version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $process = Start-Process -FilePath "$pwd/dist-rust/airplay-windows.exe" -ArgumentList '--version' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Packaged executable exited with code $($process.ExitCode)" }
       - uses: actions/upload-artifact@v4
         with:
           name: airplay-windows-rust-x64-${{ github.sha }}
