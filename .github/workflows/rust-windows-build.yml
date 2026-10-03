@@ -31,10 +31,22 @@ jobs:
         run: |
           $baseline = (Get-Content rust/vcpkg.json | ConvertFrom-Json).'builtin-baseline'
           "sha=$baseline" >> $env:GITHUB_OUTPUT
+          "msvc=$env:VCToolsVersion" >> $env:GITHUB_OUTPUT
+          "image=$env:ImageVersion" >> $env:GITHUB_OUTPUT
       - uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: ${{ steps.baseline.outputs.sha }}
+      - name: Restore native dependency installation
+        id: native-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.VCPKG_ROOT }}/installed
+          key: rust-native-${{ runner.os }}-${{ runner.arch }}-${{ steps.baseline.outputs.sha }}-${{ steps.baseline.outputs.msvc }}-${{ steps.baseline.outputs.image }}-${{ hashFiles('rust/vcpkg.json') }}
       - name: Install Rust native dependencies
+        env:
+          # The pinned vcpkg no longer supports run-vcpkg's x-gha backend.
+          # Cache the verified installation with actions/cache instead.
+          VCPKG_BINARY_SOURCES: clear
         shell: pwsh
         run: |
           # vcpkg-rs 0.2.15 only searches VCPKG_ROOT/installed; it does not
@@ -55,6 +67,12 @@ jobs:
           "$nativeRoot/x64-windows/debug/bin" >> $env:GITHUB_PATH
           "$nativeRoot/x64-windows/bin" >> $env:GITHUB_PATH
           "$nativeRoot/x64-windows/tools/ffmpeg" >> $env:GITHUB_PATH
+      - name: Save verified native dependencies
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.VCPKG_ROOT }}/installed
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Formatting and lint
         run: |
           cargo fmt --all -- --check
