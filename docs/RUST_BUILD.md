@@ -9,23 +9,28 @@ and AAC fixture generator are independent validation tools only.
 
 Install Visual Studio 2022 C++ build tools with the Windows SDK, LLVM/Clang,
 Python and Rust. Use an x64 developer PowerShell so the linker can find the
-Windows libraries. Clone vcpkg outside this checkout, bootstrap it and select
-the `builtin-baseline` revision from `rust/vcpkg.json`.
+Windows libraries. Use a dedicated vcpkg checkout for the Rust edition,
+bootstrap it and select the `builtin-baseline` revision from `rust/vcpkg.json`.
 
 ```powershell
 rustup toolchain install 1.99.0 --component rustfmt --component clippy
 $env:VCPKG_ROOT = 'C:\src\vcpkg'
 $env:LIBCLANG_PATH = 'C:\Program Files\LLVM\bin'
+$rustNativeRoot = Join-Path $env:VCPKG_ROOT 'installed'
 & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet x64-windows `
-  "--x-manifest-root=$pwd\rust" "--x-install-root=$pwd\rust\vcpkg_installed"
+  "--x-manifest-root=$pwd\rust" "--x-install-root=$rustNativeRoot"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-$env:VCPKG_INSTALLED_ROOT = "$pwd\rust\vcpkg_installed"
-$env:FFMPEG_DIR = "$env:VCPKG_INSTALLED_ROOT\x64-windows"
+New-Item -ItemType Directory -Force "$rustNativeRoot\vcpkg\updates" | Out-Null
+$env:FFMPEG_DIR = "$rustNativeRoot\x64-windows"
 $env:VCPKGRS_DYNAMIC = '1'
 $env:VCPKG_DEFAULT_TRIPLET = 'x64-windows'
 $env:PATH = "$env:FFMPEG_DIR\bin;$env:FFMPEG_DIR\debug\bin;$env:FFMPEG_DIR\tools\ffmpeg;$env:PATH"
 cargo build --locked --release --bins --examples
 ```
+
+The pinned Rust `vcpkg` crate reads `VCPKG_ROOT/installed`; it does not honor
+`VCPKG_INSTALLED_ROOT`. Keep the install root, Cargo library lookup and DLL
+packaging pointed at that same directory. The manifest remains `rust/vcpkg.json`.
 
 The FFmpeg manifest includes NVDEC, AMF and x264/x265 support. Usable hardware
 encoders depend on the installed driver. Automatic recording selection tries
