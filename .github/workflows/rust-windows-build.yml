@@ -24,7 +24,9 @@ jobs:
           arch: x64
       - uses: Swatinem/rust-cache@v2
         with:
-          key: windows-rust-native-v2
+          shared-key: airplay-rust-windows
+          key: windows-rust-native-v3-${{ hashFiles('rust/vcpkg.json') }}
+          cache-on-failure: true
       - name: Read native dependency baseline
         id: baseline
         shell: pwsh
@@ -33,6 +35,8 @@ jobs:
           "sha=$baseline" >> $env:GITHUB_OUTPUT
           "msvc=$env:VCToolsVersion" >> $env:GITHUB_OUTPUT
           "image=$env:ImageVersion" >> $env:GITHUB_OUTPUT
+          $sdkVersion = "$env:WindowsSDKVersion".TrimEnd([char]92)
+          "sdk=$sdkVersion" >> $env:GITHUB_OUTPUT
       - uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: ${{ steps.baseline.outputs.sha }}
@@ -41,7 +45,11 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_ROOT }}/installed
-          key: rust-native-${{ runner.os }}-${{ runner.arch }}-${{ steps.baseline.outputs.sha }}-${{ steps.baseline.outputs.msvc }}-${{ steps.baseline.outputs.image }}-${{ hashFiles('rust/vcpkg.json') }}
+          # Compiler/SDK changes invalidate the cache; unrelated runner image
+          # updates do not. Read the current image's older key during migration.
+          key: rust-native-${{ runner.os }}-${{ runner.arch }}-${{ steps.baseline.outputs.sha }}-${{ steps.baseline.outputs.msvc }}-sdk-${{ steps.baseline.outputs.sdk }}-${{ hashFiles('rust/vcpkg.json') }}
+          restore-keys: |
+            rust-native-${{ runner.os }}-${{ runner.arch }}-${{ steps.baseline.outputs.sha }}-${{ steps.baseline.outputs.msvc }}-${{ steps.baseline.outputs.image }}-${{ hashFiles('rust/vcpkg.json') }}
       - name: Install Rust native dependencies
         env:
           # The pinned vcpkg no longer supports run-vcpkg's x-gha backend.

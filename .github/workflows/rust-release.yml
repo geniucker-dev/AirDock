@@ -3,6 +3,7 @@ on:
   push:
     tags: ['rust-v*']
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
@@ -33,6 +34,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RUST_RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
           name: Rust experimental ${{ env.RUST_RELEASE_TAG }}
           files: airplay-windows-${{ env.RUST_RELEASE_TAG }}-x64.zip
           prerelease: true

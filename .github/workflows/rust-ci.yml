@@ -3,13 +3,15 @@ on:
   push:
     branches: [feat/rust-slint]
   pull_request:
-    paths: ['Cargo.*', 'rust/**', 'ui/**', 'build.rs', 'rust-toolchain.toml', 'tools/rust*', '.github/workflows/rust*', 'docs/RUST*']
+    paths: ['Cargo.*', 'rust/**', 'ui/**', 'build.rs', 'rust-toolchain.toml', 'tools/rust*', '.github/workflows/rust*', '.github/workflows/release.yml', 'docs/RUST*']
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: rust-ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Let a cold native dependency build finish and save its cache. GitHub keeps
+  # at most one queued run, replacing it with the newest commit when necessary.
+  cancel-in-progress: false
 jobs:
   windows:
     uses: ./.github/workflows/rust-windows-build.yml

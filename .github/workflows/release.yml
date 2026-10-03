@@ -18,7 +18,39 @@ permissions:
   contents: write   # needed for softprops/action-gh-release
 
 jobs:
+  implementation:
+    name: Select release implementation
+    runs-on: ubuntu-latest
+    outputs:
+      kind: ${{ steps.source.outputs.kind }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect checked-out application sources
+        id: source
+        shell: bash
+        run: |
+          if [[ -f Cargo.toml ]]; then
+            for required in rust/src/main.rs ui/app.slint rust/vcpkg.json; do
+              if [[ ! -f "$required" ]]; then
+                echo "::error::Rust release source is incomplete: $required"
+                exit 1
+              fi
+            done
+            echo 'kind=rust' >> "$GITHUB_OUTPUT"
+            echo 'Release implementation: Rust + Slint'
+          else
+            echo 'kind=cpp' >> "$GITHUB_OUTPUT"
+            echo 'Release implementation: C++'
+          fi
+  rust:
+    name: Rust experimental release
+    needs: implementation
+    if: needs.implementation.outputs.kind == 'rust'
+    uses: ./.github/workflows/rust-release.yml
   build-windows:
+    name: C++ Windows release
+    needs: implementation
+    if: needs.implementation.outputs.kind == 'cpp'
     runs-on: windows-latest
     steps:
       - name: Checkout

@@ -72,8 +72,11 @@ dependency manifest. See [RUST_BUILD.md](docs/RUST_BUILD.md) for reproducible co
   Slint and conversion performance checks.
 - `rust-windows-build.yml`: reusable build, media tests and dependency-complete
   Windows artifact packaging, including dependency license texts.
-- `rust-release.yml`: separate experimental prereleases for `rust-v*` tags or a
-  manual dispatch. Stable C++ releases retain their existing workflow.
+- `Release` (`release.yml`): manual dispatch selects the implementation from
+  the chosen commit. This Rust branch builds Cargo/Slint and publishes a clearly
+  marked Rust prerelease; C++ sources use the original CMake release job.
+- `rust-release.yml`: reusable experimental Rust publication, also triggered by
+  `rust-v*` tags. New Rust tags point at the exact build commit.
 
 The [original C++ README](docs/CPP_REFERENCE_README.md) describes the reference
 implementation and its existing CMake workflows.

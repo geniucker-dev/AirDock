@@ -118,3 +118,25 @@ Settings validate input before saving and use atomic replacement. Existing
 connections keep their current media configuration; updated display hints take
 effect when the sender reconnects. Changing name/HEVC/HLS advertisement settings
 re-registers discovery. Network and USB enumeration runs outside the UI thread.
+
+## CI caches and manual releases
+
+The Windows CI and release jobs share Cargo dependency caches. Native installed
+packages are cached separately by vcpkg baseline, manifest, architecture, MSVC
+and Windows SDK versions. An unrelated runner image update does not invalidate
+that native cache. The previous image-based key is accepted for migration on
+that same image/compiler combination. Installation still runs to validate the
+manifest and required files; cache hits should not rebuild unchanged packages.
+
+Native dependencies are saved immediately after successful installation, before
+Rust lint/tests, so a later Rust failure does not discard them. Cargo dependency
+caching also runs on failure. A cold build can still take around 30 minutes;
+Rust CI lets it finish instead of cancelling it with every new push. GitHub
+coalesces pending runs to the newest queued commit.
+
+For a manual Rust release, select the existing **Release** workflow and choose
+`feat/rust-slint` in **Run workflow**. The workflow reads the selected commit's
+sources and calls the Rust build/release jobs; the CMake job is skipped. Rust
+packages and tags use the `rust-dev-*` naming and are always prereleases. Their
+tags point to the build's commit, not the repository's default branch. A C++
+branch continues to use the CMake job.
