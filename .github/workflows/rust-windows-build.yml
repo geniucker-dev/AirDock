@@ -24,9 +24,12 @@ jobs:
           arch: x64
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: airplay-rust-windows
-          key: windows-rust-native-v3-${{ hashFiles('rust/vcpkg.json') }}
-          cache-on-failure: true
+          # shared-key replaces key in rust-cache. Include the native manifest
+          # here and save only after all profiles finish, so an early failure
+          # cannot permanently freeze a cache containing only Clippy output.
+          shared-key: airplay-rust-windows-profiles-v1-${{ hashFiles('rust/vcpkg.json') }}
+          env-vars: VCToolsVersion WindowsSDKVersion
+          cache-on-failure: false
       - name: Read native dependency baseline
         id: baseline
         shell: pwsh
@@ -97,6 +100,14 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m pip install cryptography
+      - name: Conversion performance against C++ reference
+        shell: pwsh
+        run: |
+          cl /nologo /O2 /EHsc /std:c++17 "/I$env:FFMPEG_DIR/include" `
+            rust/tests/conversion_reference.cpp "/Fe:target/conversion-reference.exe" `
+            /link "/LIBPATH:$env:FFMPEG_DIR/lib" avutil.lib swscale.lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/rust_performance.py --reference target/conversion-reference.exe --rust target/release/examples/core_bench.exe --output rust-validation/conversion-performance.json
       - name: Protocol and media integration
         run: python tools/rust_integration.py --binary target/release/airplay-windows.exe
       - name: Experimental HLS / FCUP integration

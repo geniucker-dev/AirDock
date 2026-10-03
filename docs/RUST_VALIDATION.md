@@ -53,6 +53,15 @@ with one scanline and at most 32 staged rows. At 4K, CPU pixel staging is about
 0.5 MiB instead of two 31.6 MiB images. The UI texture is released while hidden
 or minimized; hidden UI skips rendering and blending. On the active receiver
 page, only the surrounding UI and any error banner are blended over the video.
+On Windows, NV12 chroma is split with SSE2 into two cached planes before the
+planar swscale conversion. Luma stays in its original frame. This avoids the
+MSVC build's less accurate C conversion fallback without a full-frame copy;
+the extra chroma storage is about 4 MiB at 4K and is released when the pixel
+format changes. Both layout paths have independent color-vector coverage,
+and unaligned SIMD tails, odd dimensions and size changes are tested. The
+Windows workflow also enforces the same five-pair 95% conversion performance
+gate with its actual FFmpeg DLLs.
+
 Video uses a cached independent texture and the latest-frame handoff. Recording
 has a separate bounded queue: 90 video frames and 10 seconds of stereo audio;
 encoder initialization and MP4 finalization run outside presentation/transport.
