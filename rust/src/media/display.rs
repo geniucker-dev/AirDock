@@ -61,6 +61,10 @@ impl Converter {
             // Split only UV into cached planes, retaining the original luma
             // pointer, so the existing accelerated planar RGB path can run.
             let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+            ensure!(
+                strides[1] >= cw as i32 * 2 && !data[1].is_null(),
+                "Invalid NV12 chroma plane"
+            );
             if self
                 .chroma
                 .as_ref()
