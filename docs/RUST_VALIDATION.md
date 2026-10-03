@@ -8,10 +8,11 @@ feature or end-to-end performance parity.
 | Check | Result |
 | --- | --- |
 | Formatting and Clippy, all targets | Passed, warnings denied |
-| Debug and release unit tests | 21 passed in each profile |
+| Debug and release unit tests | 25 passed in each profile |
 | Pair verification and wire protocol | 26 independent Python checks passed |
 | PlayFair | 256 independent deterministic vectors, all four modes, identical to the bundled C oracle |
 | Encrypted mirroring | 120 H.264/HEVC frames decoded, including changes between landscape/portrait and between codecs on the same connection |
+| Mirroring reconnects | 13 independent encrypted connection scenarios, 390 frames decoded in both headless and Slint GUI runs |
 | Slint presentation | 120 new frames presented; zero replaced frames and zero recording drops in the synthetic release run |
 | Color conversion | 4,752 independently calculated vectors; maximum error 2.886/255, below the 3/255 bound |
 | Audio | Encrypted ALAC over IPv4/IPv6 with exact PCM, AAC-ELD 480/512 and both supported content types; loss/retransmit/reorder/wrap/FLUSH/long-pause recovery passed |
@@ -66,11 +67,37 @@ Video uses a cached independent texture and the latest-frame handoff. Recording
 has a separate bounded queue: 90 video frames and 10 seconds of stereo audio;
 encoder initialization and MP4 finalization run outside presentation/transport.
 
+## Mirroring reconnect regression
+
+The previous receiver decoded only the first 30 of 60 independently encrypted
+frames when a low-bit stream ID was followed by an eight-byte ID with its high
+bit set. The plist reader interprets eight-byte integers as signed; the generic
+unsigned accessor dropped these IDs, and SETUP substituted zero. Video key
+derivation therefore used a different ID from the sender. SETUP now preserves
+the opaque ID's 64-bit pattern, without changing port or other numeric parsing.
+
+A separately reproduced TCP reset during a partial mirror header also closed
+the advertised video listener. Connection errors now end only the accepted
+socket, allowing a new data connection with fresh decoder and cipher state.
+
+`tools/rust_reconnect_integration.py` exercises IDs around the signed boundary,
+both eight-byte signed and wider positive plist encodings, full and stream-only
+TEARDOWN on a reused control connection, replacement control connections while
+the old connection remains open, clean data EOF, resets during headers/payloads,
+and recovery after malformed configuration. All 13 successful connections must
+decode their 30 H.264/HEVC frames. Windows and Linux CI run this harness; Linux
+also runs it through Slint presentation. The local GUI run decoded 390 frames
+and presented 386, with four latest-frame replacements under synthetic load.
+These checks do not establish actual iPhone or high-resolution FPS parity.
+
+The complete native Windows build, pinned FFmpeg 8.1 linking, media checks,
+conversion performance gate and packaged DLL startup already passed in the
+[preceding CI run](https://github.com/geniucker-dev/AirPlay-Windows/actions/runs/37124317005).
+Each subsequent run validates its own reconnect changes and saves its metrics
+in the validation artifacts.
+
 ## Still pending
 
-- Execute the complete Windows workflow against the pinned FFmpeg 8.1 vcpkg
-  manifest, including native linking and packaged DLL resolution. Isolated
-  API compilation is not a substitute for that Windows build.
 - Real iPhone discovery/pairing, mirroring/audio and reconnect acceptance on
   Windows, including firewall, hotspot and USB network configurations.
 - Native tray hide/restore/quit, startup settings, Unicode folders and monitor

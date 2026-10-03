@@ -548,7 +548,7 @@ impl Session {
                         let (port, worker) = transport::mirror(
                             self.peer,
                             key,
-                            integer(s, "streamConnectionID").unwrap_or(0),
+                            protocol::stream_connection_id(s).unwrap_or(0),
                             self.device.shared.clone(),
                         )?;
                         self.mirror = Some(worker);

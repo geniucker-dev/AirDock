@@ -115,6 +115,8 @@ jobs:
           python tools/rust_performance.py --reference target/conversion-reference.exe --rust target/release/examples/core_bench.exe --output rust-validation/conversion-performance.json
       - name: Protocol and media integration
         run: python tools/rust_integration.py --binary target/release/airplay-windows.exe
+      - name: Encrypted mirroring reconnect regression
+        run: python tools/rust_reconnect_integration.py --binary target/release/airplay-windows.exe
       - name: Experimental HLS / FCUP integration
         run: python tools/rust_hls_integration.py --binary target/release/airplay-windows.exe
       - name: Compile the independent FairPlay reference

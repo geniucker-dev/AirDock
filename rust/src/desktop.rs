@@ -809,7 +809,11 @@ fn gui(
                 "".into()
             });
             ui.set_track_title(if state.title.is_empty() {
-                "Audio streaming".into()
+                if state.kind == "Screen mirroring" {
+                    "Waiting for video…".into()
+                } else {
+                    "Audio streaming".into()
+                }
             } else {
                 state.title.into()
             });

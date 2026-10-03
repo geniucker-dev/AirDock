@@ -136,69 +136,78 @@ pub fn mirror(
         while !stop.load(Ordering::Acquire) {
             match listener.accept() {
                 Ok((mut stream, addr)) if addr.ip() == peer.ip() => {
-                    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
-                    stream.set_nodelay(true)?;
-                    let mut cipher = crypto::mirror_cipher(&key, connection);
-                    let mut decoder: Option<video::Decoder> = None;
-                    loop {
-                        let mut header = [0; 128];
-                        if !read_exact_cancel(&mut stream, &mut header, &stop)? {
-                            break;
-                        }
-                        let len = u32::from_le_bytes(header[..4].try_into()?) as usize;
-                        ensure!(len <= 2_000_000, "Mirror payload exceeds limit");
-                        let kind = u16::from_be_bytes(header[4..6].try_into()?);
-                        let mut payload = vec![0; len];
-                        if !read_exact_cancel(&mut stream, &mut payload, &stop)? {
-                            break;
-                        }
-                        let received = Instant::now();
-                        state.metrics.bytes.fetch_add(len as u64, Ordering::Relaxed);
-                        match kind {
-                            0x0100 => {
-                                let config = video::Configuration::parse(&payload)?;
-                                let codec = if config.hevc { "HEVC" } else { "H.264" };
-                                let hardware = state.settings.read().unwrap().hardware_decode;
-                                if let Some(d) = &mut decoder {
-                                    d.reconfigure(config, hardware)?;
-                                } else {
-                                    decoder = Some(video::Decoder::new(config, hardware)?);
-                                }
-                                let d = decoder.as_ref().unwrap();
-                                {
-                                    let mut ui = state.ui.lock().unwrap();
-                                    ui.codec = codec.into();
-                                    ui.decoder = d.backend().into();
-                                }
+                    // A reset or malformed record ends this data connection,
+                    // not the advertised listener. The sender can reconnect
+                    // without another SETUP; each connection gets fresh CTR state.
+                    let result = (|| -> Result<()> {
+                        stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+                        stream.set_nodelay(true)?;
+                        let mut cipher = crypto::mirror_cipher(&key, connection);
+                        let mut decoder: Option<video::Decoder> = None;
+                        loop {
+                            let mut header = [0; 128];
+                            if !read_exact_cancel(&mut stream, &mut header, &stop)? {
+                                break;
                             }
-                            0x0000 | 0x0010 => {
-                                cipher.apply_keystream(&mut payload);
-                                if let Some(d) = decoder.as_mut() {
-                                    match d.decode_mirror(&mut payload, kind == 0x0010) {
-                                        Ok(frames) => {
-                                            for frame in frames {
-                                                {
-                                                    let mut ui = state.ui.lock().unwrap();
-                                                    ui.dimensions = format!(
-                                                        "{} × {}",
-                                                        frame.width(),
-                                                        frame.height()
-                                                    );
-                                                    ui.decoder = d.backend().into();
-                                                }
-                                                state.publish(VideoFrame {
-                                                    frame,
-                                                    received,
-                                                    timeline: state.started.elapsed(),
-                                                });
-                                            }
-                                        }
-                                        Err(e) => tracing::warn!("Video packet rejected: {e}"),
+                            let len = u32::from_le_bytes(header[..4].try_into()?) as usize;
+                            ensure!(len <= 2_000_000, "Mirror payload exceeds limit");
+                            let kind = u16::from_be_bytes(header[4..6].try_into()?);
+                            let mut payload = vec![0; len];
+                            if !read_exact_cancel(&mut stream, &mut payload, &stop)? {
+                                break;
+                            }
+                            let received = Instant::now();
+                            state.metrics.bytes.fetch_add(len as u64, Ordering::Relaxed);
+                            match kind {
+                                0x0100 => {
+                                    let config = video::Configuration::parse(&payload)?;
+                                    let codec = if config.hevc { "HEVC" } else { "H.264" };
+                                    let hardware = state.settings.read().unwrap().hardware_decode;
+                                    if let Some(d) = &mut decoder {
+                                        d.reconfigure(config, hardware)?;
+                                    } else {
+                                        decoder = Some(video::Decoder::new(config, hardware)?);
+                                    }
+                                    let d = decoder.as_ref().unwrap();
+                                    {
+                                        let mut ui = state.ui.lock().unwrap();
+                                        ui.codec = codec.into();
+                                        ui.decoder = d.backend().into();
                                     }
                                 }
+                                0x0000 | 0x0010 => {
+                                    cipher.apply_keystream(&mut payload);
+                                    if let Some(d) = decoder.as_mut() {
+                                        match d.decode_mirror(&mut payload, kind == 0x0010) {
+                                            Ok(frames) => {
+                                                for frame in frames {
+                                                    {
+                                                        let mut ui = state.ui.lock().unwrap();
+                                                        ui.dimensions = format!(
+                                                            "{} × {}",
+                                                            frame.width(),
+                                                            frame.height()
+                                                        );
+                                                        ui.decoder = d.backend().into();
+                                                    }
+                                                    state.publish(VideoFrame {
+                                                        frame,
+                                                        received,
+                                                        timeline: state.started.elapsed(),
+                                                    });
+                                                }
+                                            }
+                                            Err(e) => tracing::warn!("Video packet rejected: {e}"),
+                                        }
+                                    }
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
+                        Ok(())
+                    })();
+                    if let Err(e) = result {
+                        tracing::warn!("Mirror connection ended: {e:#}");
                     }
                 }
                 Ok(_) => {}

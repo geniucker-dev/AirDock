@@ -37,11 +37,13 @@ def ffmpeg_hex(text):
             if hex_bytes:chunks.append(bytes.fromhex(hex_bytes))
     return b''.join(chunks)
 
-def send_mirror(connection,key,paths):
-    ident=123456
-    body=plistlib.dumps({'streams':[{'type':110,'streamConnectionID':ident}]},fmt=plistlib.FMT_BINARY)
-    status,_,body=connection.rpc('SETUP','/stream',body,{'Content-Type':'application/x-apple-binary-plist'});assert status==200
-    port=plistlib.loads(body)['streams'][0]['dataPort']
+def send_mirror(connection,key,paths,ident=123456,port=None,signed_id=True):
+    if port is None:
+        # Apple eight-byte plist integers preserve the ID's unsigned bit pattern.
+        wire_id=ident-(1<<64) if signed_id and ident>=(1<<63) else ident
+        body=plistlib.dumps({'streams':[{'type':110,'streamConnectionID':wire_id}]},fmt=plistlib.FMT_BINARY)
+        status,_,body=connection.rpc('SETUP','/stream',body,{'Content-Type':'application/x-apple-binary-plist'});assert status==200
+        port=plistlib.loads(body)['streams'][0]['dataPort']
     derive=lambda salt:hashlib.sha512((salt+str(ident)).encode()+key).digest()[:16]
     cipher=Cipher(algorithms.AES(derive('AirPlayStreamKey')),modes.CTR(derive('AirPlayStreamIV'))).encryptor()
     with socket.create_connection(('127.0.0.1',port),timeout=3) as mirror:
@@ -60,6 +62,7 @@ def send_mirror(connection,key,paths):
             for video in probe['packets']:
                 packet(0x10 if 'K' in video['flags'] else 0,cipher.update(ffmpeg_hex(video['data'])))
                 time.sleep(1/30)
+    return port
 
 def wire_media(port,output,paths):
     pair.PORT=port;runner=pair.Runner()

@@ -38,6 +38,7 @@ jobs:
           python-version: '3.13'
       - run: python -m pip install cryptography Pillow
       - run: python tools/rust_integration.py --binary target/debug/airplay-windows
+      - run: python tools/rust_reconnect_integration.py --binary target/debug/airplay-windows
       - run: python tools/rust_hls_integration.py --binary target/debug/airplay-windows
       - name: FairPlay differential oracle
         run: |
@@ -47,6 +48,8 @@ jobs:
         run: xvfb-run -a python tools/rust_ui_smoke.py --binary target/debug/airplay-windows
       - name: Encrypted video through Slint presentation
         run: xvfb-run -a python tools/rust_integration.py --gui --binary target/debug/airplay-windows
+      - name: Reconnected video through Slint presentation
+        run: xvfb-run -a python tools/rust_reconnect_integration.py --gui --binary target/debug/airplay-windows
       - name: Release conversion performance against C++ reference
         run: |
           cargo build --locked --release --example core_bench

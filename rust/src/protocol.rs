@@ -190,6 +190,15 @@ pub fn uint(value: u64) -> Value {
 pub fn integer(d: &Dictionary, k: &str) -> Option<u64> {
     d.get(k)?.as_unsigned_integer()
 }
+pub fn stream_connection_id(d: &Dictionary) -> Option<u64> {
+    let value = d.get("streamConnectionID")?;
+    // Eight-byte binary plist integers are read as i64. This opaque AirPlay ID
+    // uses all 64 bits; its unsigned decimal form participates in key derivation.
+    // Keep this reinterpretation separate from numeric fields such as ports.
+    value
+        .as_unsigned_integer()
+        .or_else(|| value.as_signed_integer().map(|id| id as u64))
+}
 pub fn string<'a>(d: &'a Dictionary, k: &str) -> Option<&'a str> {
     d.get(k)?.as_string()
 }
@@ -227,6 +236,50 @@ pub fn metadata(bytes: &[u8], depth: usize, out: &mut BTreeMap<String, String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mirror_id_preserves_all_wire_bits() {
+        for id in [
+            0,
+            123456,
+            i64::MAX as u64,
+            1 << 63,
+            0xfedcba9876543210,
+            u64::MAX,
+        ] {
+            // Independent minimal binary plist: a single eight-byte integer.
+            let mut bytes = b"bplist00".to_vec();
+            bytes.push(0x13);
+            bytes.extend_from_slice(&id.to_be_bytes());
+            bytes.push(8); // Object offset table.
+            bytes.extend_from_slice(&[0; 6]);
+            bytes.extend_from_slice(&[1, 1]); // Offset/ref widths.
+            for field in [1u64, 0, 17] {
+                // Object count, root index, table offset.
+                bytes.extend_from_slice(&field.to_be_bytes());
+            }
+            let value = Value::from_reader(std::io::Cursor::new(bytes)).unwrap();
+            let mut d = Dictionary::new();
+            d.insert("streamConnectionID".into(), value.clone());
+            assert_eq!(stream_connection_id(&d), Some(id));
+            if id > i64::MAX as u64 {
+                assert_eq!(integer(&d, "streamConnectionID"), None);
+            }
+            // Also accept a positive ID encoded in a wider plist integer.
+            let positive =
+                Value::from_reader(std::io::Cursor::new(binary(&uint(id)).unwrap())).unwrap();
+            d.insert("streamConnectionID".into(), positive);
+            assert_eq!(stream_connection_id(&d), Some(id));
+            d.insert("timingPort".into(), value);
+            assert_eq!(
+                integer(&d, "timingPort"),
+                (id <= i64::MAX as u64).then_some(id)
+            );
+        }
+        let mut d = Dictionary::new();
+        assert_eq!(stream_connection_id(&d), None);
+        d.insert("streamConnectionID".into(), Value::String("123".into()));
+        assert_eq!(stream_connection_id(&d), None);
+    }
     #[test]
     fn absolute_uri_and_query() {
         let r = Request {
