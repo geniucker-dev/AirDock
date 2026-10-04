@@ -35,7 +35,7 @@ DLLs; do not copy the entire vcpkg bin directory.
 Install libavcodec/libavformat/libavutil/libswresample development files,
 libasound2-dev, libfontconfig1-dev, libxkbcommon-dev, libxkbcommon-x11-0,
 libvulkan1, mesa-vulkan-drivers, clang/libclang, pkg-config, xvfb/xauth and
-xdotool. Linux system FFmpeg is a development/test dependency, not the Windows
+xdotool and openbox. Linux system FFmpeg is a development/test dependency, not the Windows
 LGPL distribution. `AIRPLAY_AUDIO_NULL=1` explicitly selects deterministic
 no-device testing and never counts as WASAPI or speaker validation.
 

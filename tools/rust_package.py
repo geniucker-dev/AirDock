@@ -72,7 +72,14 @@ def audit(directory):
     assert (directory/'sources/native-triplets/x64-windows.cmake').exists(),'Native build triplet missing'
     assert (directory/'sources/ffmpeg-source.zip').exists(),'Corresponding patched FFmpeg source archive missing'
     assert (directory/'sources/native-build/ffmpeg/portfile.cmake').exists(),'Native build materials missing'
-    result={'dlls':rows,'runtime':report,'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in directory.iterdir() if p.suffix in ['.dll','.exe']},'physical_windows_iphone_acceptance':'pending'}
+    notices=json.loads((directory/'rust-licenses/index.json').read_text())
+    assert notices, 'Rust dependency license index missing'
+    for crate in notices:
+        assert crate['files'], f"Missing license texts: {crate['name']}"
+        base=directory/'rust-licenses'/(crate['name']+'-'+crate['version'])
+        for entry in crate['files']:
+            assert hashlib.sha256((base/entry['file']).read_bytes()).hexdigest()==entry['sha256'], crate['name']
+    result={'dlls':rows,'runtime':report,'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in directory.iterdir() if p.suffix in ['.dll','.exe']},'verified_rust_license_packages':len(notices),'physical_windows_iphone_acceptance':'pending'}
     (directory/'NATIVE_AUDIT.json').write_text(json.dumps(result,indent=2))
     handle.close();return result
 

@@ -1,8 +1,9 @@
 # Validation status
 
-This migration is undergoing automatic regression and Windows packaging checks.
-Final CI artifacts contain JSON reports and logs; do not infer physical hardware
-acceptance from a green build.
+Automatic Linux/Windows regression and Windows packaging gates passed on migration
+commit `1ac2d47`: [CI run](https://github.com/geniucker-dev/AirPlay-Windows/actions/runs/37176872603).
+Subsequent commits must pass the same gates. Final CI artifacts contain JSON reports
+and logs; do not infer physical hardware acceptance from a green build.
 
 ## Locally executed checks
 
@@ -16,6 +17,7 @@ acceptance from a green build.
   device conversion/draining but is not physical audio or WASAPI acceptance.
 - Rust unit regressions: ring concurrency, callback allocation/format/pause,
   generation isolation, protocol parsing/recovery, stride and format validation.
+  All 38 tests passed locally and in Windows debug/release builds.
 - Encrypted mirroring and repeated reconnection integration fixtures.
 - HLS transport stream and fragmented MP4 decode, PCM counts and cancellation.
 - Iced Xvfb pages/settings/fullscreen/focus/resize regression.
@@ -32,6 +34,11 @@ requires HLS/TS/fMP4/HTTPS/TLS and hardware decoders, and includes corresponding
 patched source plus build instructions. `NATIVE_AUDIT.json` records DLL hashes,
 versions, flags and dependency closure. Packaged reconnect/fMP4 tests run with
 native build directories removed from PATH.
+
+Rust dependency notices cover the Windows dependency closure, including build
+dependencies. Crates that omit workspace license texts use checked-in supplements
+from the exact `.cargo_vcs_info.json` commit, with source URLs and SHA-256 hashes.
+Packaging fails on missing texts or hash mismatches, and audits the copied texts.
 
 A package is validated only when that workflow and the final DLL audit succeed.
 Linux development uses system FFmpeg; its license/configuration do not certify

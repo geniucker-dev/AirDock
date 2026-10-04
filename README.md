@@ -49,6 +49,8 @@ not mean quitting the receiver.
 
 See [build instructions](docs/RUST_BUILD.md), [architecture](docs/RUST_ARCHITECTURE.md),
 [validation status](docs/RUST_VALIDATION.md) and [hardware acceptance](docs/RUST_ACCEPTANCE.md).
+The [migration report](docs/RUST_MIGRATION_REPORT.md) lists the delivered changes,
+executed regressions, package contents and remaining physical checks.
 The Windows package uses audited LGPL FFmpeg DLLs, includes corresponding patched
 source/build material and required notices, and is tested again with a clean PATH.
 CI and manual release dispatch build the checked-out Iced implementation.
