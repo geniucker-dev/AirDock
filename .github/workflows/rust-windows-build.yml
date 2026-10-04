@@ -10,6 +10,7 @@ jobs:
     timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
+      PYTHONUTF8: '1'
       AIRPLAY_AUDIO_NULL: '1'
       VCPKGRS_DYNAMIC: '1'
       VCPKG_DEFAULT_TRIPLET: x64-windows
