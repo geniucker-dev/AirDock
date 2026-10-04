@@ -85,8 +85,8 @@ begin
   if CurUninstallStep <> usUninstall then Exit;
   Log('Checking this installation autostart ownership.');
   if RegQueryStringValue(HKCU64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'AirPlay-Windows', Value) then begin
-    Value := Lowercase(Trim(Value));
-    Exe := Lowercase(ExpandConstant('{app}\airplay-windows.exe'));
+    Value := Trim(Value);
+    Exe := ExpandConstant('{app}\airplay-windows.exe');
     Log('Expected autostart executable: ' + Exe);
     if Copy(Value, 1, 1) = '"' then begin
       Candidate := Copy(Value, 2, Length(Value));
@@ -95,7 +95,9 @@ begin
         Log('Registered autostart executable: ' + Copy(Candidate, 1, Quote - 1));
     end;
     Log('Quoted executable prefix offset: ' + IntToStr(Pos('"' + Exe + '"', Value)));
-    if (Value = Exe) or (Pos('"' + Exe + '"', Value) = 1) or (Pos(Exe + ' ', Value) = 1) then begin
+    if (CompareText(Value, Exe) = 0) or
+       (CompareText(Copy(Value, 1, Length(Exe) + 2), '"' + Exe + '"') = 0) or
+       (CompareText(Copy(Value, 1, Length(Exe) + 1), Exe + ' ') = 0) then begin
       if not RegDeleteValue(HKCU64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'AirPlay-Windows') then
         RaiseException('Cannot remove this installation autostart entry.');
       Log('Removed the 64-bit autostart entry owned by this installation.');
