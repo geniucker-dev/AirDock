@@ -177,7 +177,14 @@ impl Decoder {
     pub fn new(config: Configuration, hardware: bool) -> Result<Self> {
         #[cfg(windows)]
         if hardware {
-            for backend in [Backend::Nvdec, Backend::D3d11] {
+            for backend in if crate::render::compositor::VENDOR
+                .load(std::sync::atomic::Ordering::Acquire)
+                == 0x10de
+            {
+                [Backend::Nvdec, Backend::D3d11]
+            } else {
+                [Backend::D3d11, Backend::Nvdec]
+            } {
                 match Self::open(config.clone(), backend) {
                     Ok(mut decoder) => {
                         decoder.requested_hardware = hardware;
@@ -308,8 +315,20 @@ impl Decoder {
         self.decode_mirror(bytes, false)
     }
     pub fn decode_mirror(&mut self, bytes: &mut Vec<u8>, idr: bool) -> Result<Vec<frame::Video>> {
+        self.decode_mirror_at(bytes, idr, None)
+    }
+    pub fn flush(&mut self) {
+        self.inner.flush();
+        self.pending_configuration = true;
+    }
+    pub fn decode_mirror_at(
+        &mut self,
+        bytes: &mut Vec<u8>,
+        idr: bool,
+        pts: Option<i64>,
+    ) -> Result<Vec<frame::Video>> {
         annex_b(bytes, self.length_size)?;
-        let packet = if idr || self.pending_configuration {
+        let mut packet = if idr || self.pending_configuration {
             self.scratch.clear();
             self.scratch.extend_from_slice(&self.configuration.bytes);
             self.scratch.extend_from_slice(bytes);
@@ -317,6 +336,7 @@ impl Decoder {
         } else {
             ffmpeg::Packet::copy(bytes)
         };
+        packet.set_pts(pts);
         self.pending_configuration = false;
         match self.packet(&packet) {
             Ok(frames) => Ok(frames),

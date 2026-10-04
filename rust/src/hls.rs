@@ -192,6 +192,7 @@ impl Hls {
         self.inner.ready.notify_all();
         if let Some((stop, worker)) = self.player.lock().unwrap().take() {
             stop.store(true, Ordering::Release);
+            self.inner.shared.reset_media();
             self.inner.ready.notify_all();
             let _ = worker.join();
         }
@@ -254,6 +255,12 @@ impl Hls {
         let mut s = self.inner.session.lock().unwrap();
         s.1.rate = if rate > 0. { 1. } else { 0. };
         self.inner.shared.ui.lock().unwrap().paused = rate <= 0.;
+        self.inner
+            .shared
+            .media
+            .audio_clock
+            .paused
+            .store(rate <= 0., Ordering::Release);
         self.inner.ready.notify_all();
     }
     pub fn seek(&self, position: f64) {
@@ -641,11 +648,10 @@ pub fn rewrite(text: &str, base: &str, mut local: impl FnMut(&str) -> String) ->
 }
 
 fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()> {
+    use std::sync::mpsc::{self, TrySendError};
     let mut options = ffmpeg::Dictionary::new();
     options.set("rw_timeout", "2000000");
-    options.set("protocol_whitelist", "http,https,tcp,tls,crypto");
-    // Local resource URLs deliberately carry opaque IDs, including signed
-    // condensed URLs with no extension. The proxy validates upstream schemes.
+    options.set("protocol_whitelist", "file,http,https,tcp,tls,crypto");
     options.set("allowed_extensions", "ALL");
     options.set("allowed_segment_extensions", "ALL");
     options.set("extension_picky", "0");
@@ -656,37 +662,29 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
         move || cancel.load(Ordering::Acquire) || global.stop.load(Ordering::Acquire),
         options,
     )?;
-    let video_stream = input
+    let stream = input
         .streams()
         .best(media::Type::Video)
         .context("HLS video stream missing")?;
-    let vi = video_stream.index();
-    let vt = video_stream.time_base();
-    let mut video = codec::Context::from_parameters(video_stream.parameters())?
+    let vi = stream.index();
+    let vt = stream.time_base();
+    let mut video = codec::Context::from_parameters(stream.parameters())?
         .decoder()
         .video()?;
-    let audio_stream = input.streams().best(media::Type::Audio);
-    let ai = audio_stream.as_ref().map(|s| s.index());
-    let mut decoder = audio_stream
-        .map(|s| codec::Context::from_parameters(s.parameters()).and_then(|c| c.decoder().audio()))
-        .transpose()?;
-    let mut resampler = None::<ffmpeg::software::resampling::Context>;
-    let mut sink = if decoder.is_some() {
-        Some(audio::Sink::new(44100, 2)?)
+    let audio = input.streams().best(media::Type::Audio);
+    let ai = audio.as_ref().map(|s| s.index());
+    let at = audio.as_ref().map(|s| s.time_base());
+    let audio_parameters = audio.map(|s| s.parameters());
+    let start = unsafe { (*input.as_ptr()).start_time };
+    let start_us = if start == ffmpeg::ffi::AV_NOPTS_VALUE {
+        0
     } else {
-        None
-    };
-    let mut clock = None::<(Instant, f64)>;
-    let start_time = unsafe { (*input.as_ptr()).start_time };
-    let start_seconds = if start_time == ffmpeg::ffi::AV_NOPTS_VALUE {
-        0.
-    } else {
-        start_time as f64 / 1_000_000.
+        start
     };
     {
-        let mut s = inner.session.lock().unwrap();
-        s.1.duration = input.duration().max(0) as f64 / 1_000_000.;
-        s.1.started = true;
+        let mut session = inner.session.lock().unwrap();
+        session.1.duration = input.duration().max(0) as f64 / 1_000_000.;
+        session.1.started = true;
     }
     {
         let mut ui = inner.shared.ui.lock().unwrap();
@@ -694,69 +692,223 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
         ui.kind = "HLS playback".into();
         ui.decoder = "CPU".into();
     }
-    loop {
-        if stop.load(Ordering::Acquire) || inner.stop.load(Ordering::Acquire) {
-            break;
-        }
-        let seek = inner.session.lock().unwrap().1.seek.take();
-        if let Some(position) = seek {
-            input.seek(((position + start_seconds) * 1_000_000.) as i64, ..)?;
-            video.flush();
-            if let Some(d) = &mut decoder {
-                d.flush()
-            }
-            if let Some(s) = &mut sink {
-                s.flush()
-            }
-            clock = None;
-        }
-        while inner.session.lock().unwrap().1.rate <= 0. {
-            if stop.load(Ordering::Acquire) || inner.stop.load(Ordering::Acquire) {
+    let (vtx, vrx) = mpsc::sync_channel::<(u64, Option<ffmpeg::Packet>)>(32);
+    let (atx, arx) = mpsc::sync_channel::<(u64, Option<ffmpeg::Packet>)>(128);
+    let local_stop = Arc::new(AtomicBool::new(false));
+    let shared = inner.shared.clone();
+    let audio_stop = local_stop.clone();
+    let global_stop = stop.clone();
+    let audio_worker = thread::Builder::new()
+        .name("hls-audio-decode".into())
+        .spawn(move || -> Result<()> {
+            let Some(parameters) = audio_parameters else {
                 return Ok(());
+            };
+            let timebase = at.unwrap();
+            let mut decoder = codec::Context::from_parameters(parameters)?
+                .decoder()
+                .audio()?;
+            let mut sink = audio::Sink::for_hls(44100, 2, &shared)?;
+            let mut resampler = None::<ffmpeg::software::resampling::Context>;
+            let mut epoch = shared.generation();
+            while !audio_stop.load(Ordering::Acquire) && !global_stop.load(Ordering::Acquire) {
+                let (generation, packet) = match arx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(p) => p,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(_) => break,
+                };
+                if generation != shared.generation() {
+                    continue;
+                }
+                if generation != epoch {
+                    epoch = generation;
+                    decoder.flush();
+                    resampler = None;
+                    sink.set_epoch(epoch);
+                    sink.flush();
+                }
+                if let Some(packet) = packet {
+                    decoder.send_packet(&packet)?
+                } else {
+                    decoder.send_eof()?
+                }
+                loop {
+                    let mut frame = frame::Audio::empty();
+                    match decoder.receive_frame(&mut frame) {
+                        Ok(()) => {}
+                        Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => {
+                            break;
+                        }
+                        Err(ffmpeg::Error::Eof) => {
+                            sink.drain(&global_stop)?;
+                            return Ok(());
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
+                    if frame.channel_layout().is_empty() {
+                        frame.set_channel_layout(ChannelLayout::default(frame.channels() as i32));
+                    }
+                    let pts = frame.timestamp().map(|ticks| {
+                        crate::playback::MediaTime {
+                            ticks,
+                            numerator: timebase.numerator(),
+                            denominator: timebase.denominator(),
+                        }
+                        .micros()
+                            - start_us
+                    });
+                    let def = ffmpeg::software::resampling::context::Definition {
+                        format: frame.format(),
+                        channel_layout: frame.channel_layout(),
+                        rate: frame.rate(),
+                    };
+                    if resampler.as_ref().is_none_or(|r| r.input() != &def) {
+                        resampler = Some(ffmpeg::software::resampling::Context::get(
+                            def.format,
+                            def.channel_layout,
+                            def.rate,
+                            ffmpeg::format::Sample::I16(ffmpeg::format::sample::Type::Packed),
+                            ChannelLayout::STEREO,
+                            44100,
+                        )?);
+                    }
+                    let mut output = frame::Audio::empty();
+                    resampler.as_mut().unwrap().run(&frame, &mut output)?;
+                    let pcm = unsafe {
+                        std::slice::from_raw_parts(
+                            (*output.as_ptr()).data[0].cast::<i16>(),
+                            output.samples() * 2,
+                        )
+                    }
+                    .to_vec();
+                    sink.volume(shared.ui.lock().unwrap().volume_db);
+                    sink.push_at(&pcm, pts)?;
+                    shared
+                        .metrics
+                        .hls_audio_samples
+                        .fetch_add((pcm.len() / 2) as u64, Ordering::Relaxed);
+                    shared.pcm(Arc::new(pcm), 44100);
+                }
             }
-            thread::sleep(Duration::from_millis(20));
-            clock = None;
-        }
-        let mut packet = ffmpeg::Packet::empty();
-        let eof = match packet.read(&mut input) {
-            Ok(()) => false,
-            Err(ffmpeg::Error::Eof) => {
-                video.send_eof()?;
-                true
+            Ok(())
+        })?;
+    let demux_stop = local_stop.clone();
+    let external_stop = stop.clone();
+    let state = inner.clone();
+    let demux = thread::Builder::new()
+        .name("hls-demux".into())
+        .spawn(move || -> Result<()> {
+            let mut epoch = state.shared.generation();
+            while !demux_stop.load(Ordering::Acquire) && !external_stop.load(Ordering::Acquire) {
+                let seek = state.session.lock().unwrap().1.seek.take();
+                if let Some(position) = seek {
+                    input.seek((position * 1_000_000.) as i64 + start_us, ..)?;
+                    epoch = state.shared.reset_media();
+                }
+                if state.session.lock().unwrap().1.rate <= 0. {
+                    thread::sleep(Duration::from_millis(20));
+                    continue;
+                }
+                let mut packet = ffmpeg::Packet::empty();
+                let eof = match packet.read(&mut input) {
+                    Ok(()) => false,
+                    Err(ffmpeg::Error::Eof) => true,
+                    Err(e) => return Err(e.into()),
+                };
+                let target = if eof || packet.stream() == vi {
+                    Some(&vtx)
+                } else if Some(packet.stream()) == ai {
+                    Some(&atx)
+                } else {
+                    None
+                };
+                if let Some(target) = target {
+                    let mut item = (epoch, if eof { None } else { Some(packet) });
+                    loop {
+                        match target.try_send(item) {
+                            Ok(()) => break,
+                            Err(TrySendError::Disconnected(_)) => return Ok(()),
+                            Err(TrySendError::Full(p)) => {
+                                item = p;
+                                if demux_stop.load(Ordering::Acquire)
+                                    || external_stop.load(Ordering::Acquire)
+                                {
+                                    return Ok(());
+                                }
+                                if state.session.lock().unwrap().1.seek.is_some() {
+                                    break;
+                                }
+                                thread::sleep(Duration::from_millis(2));
+                            }
+                        }
+                    }
+                }
+                if eof {
+                    let mut item = (epoch, None);
+                    loop {
+                        match atx.try_send(item) {
+                            Ok(()) | Err(TrySendError::Disconnected(_)) => break,
+                            Err(TrySendError::Full(p)) => {
+                                item = p;
+                                if demux_stop.load(Ordering::Acquire)
+                                    || external_stop.load(Ordering::Acquire)
+                                {
+                                    return Ok(());
+                                }
+                                thread::sleep(Duration::from_millis(2));
+                            }
+                        }
+                    }
+                    break;
+                }
             }
-            Err(e) => return Err(e.into()),
-        };
-        if eof || packet.stream() == vi {
-            if !eof {
-                video.send_packet(&packet)?;
+            Ok(())
+        })?;
+    let result = (|| -> Result<()> {
+        let mut epoch = inner.shared.generation();
+        while !stop.load(Ordering::Acquire) && !inner.stop.load(Ordering::Acquire) {
+            let (generation, packet) = match vrx.recv_timeout(Duration::from_millis(100)) {
+                Ok(p) => p,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => break,
+            };
+            if generation != inner.shared.generation() {
+                continue;
+            }
+            if generation != epoch {
+                epoch = generation;
+                video.flush();
+            }
+            if let Some(packet) = packet {
+                video.send_packet(&packet)?
+            } else {
+                video.send_eof()?
             }
             loop {
                 let mut frame = frame::Video::empty();
                 match video.receive_frame(&mut frame) {
                     Ok(()) => {}
                     Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => break,
-                    Err(ffmpeg::Error::Eof) => break,
+                    Err(ffmpeg::Error::Eof) => return Ok(()),
                     Err(e) => return Err(e.into()),
                 }
-                let position =
-                    (frame.timestamp().unwrap_or(0) as f64 * f64::from(vt) - start_seconds).max(0.);
-                let (start, base) = *clock.get_or_insert((Instant::now(), position));
-                let target = start + Duration::from_secs_f64((position - base).max(0.));
-                while Instant::now() < target {
-                    if stop.load(Ordering::Acquire) {
-                        return Ok(());
-                    }
-                    thread::sleep(
-                        target
-                            .saturating_duration_since(Instant::now())
-                            .min(Duration::from_millis(10)),
-                    );
+                let pts = frame.timestamp().map(|ticks| {
+                    crate::playback::MediaTime::microseconds(
+                        crate::playback::MediaTime {
+                            ticks,
+                            numerator: vt.numerator(),
+                            denominator: vt.denominator(),
+                        }
+                        .micros()
+                            - start_us,
+                    )
+                });
+                if let Some(pts) = pts {
+                    inner.session.lock().unwrap().1.position =
+                        pts.micros().max(0) as f64 / 1_000_000.;
                 }
-                inner.session.lock().unwrap().1.position = position;
                 inner.shared.ui.lock().unwrap().dimensions =
                     format!("{} × {}", frame.width(), frame.height());
-                // HLS frames use codec defaults; unlike mirroring, unspecified
-                // YUV range is conventionally limited, and is made explicit.
                 unsafe {
                     if (*frame.as_ptr()).color_range
                         == ffmpeg::ffi::AVColorRange::AVCOL_RANGE_UNSPECIFIED
@@ -768,59 +920,26 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
                 inner.shared.publish(VideoFrame {
                     frame,
                     received: Instant::now(),
-                    timeline: inner.shared.started.elapsed(),
+                    pts,
+                    epoch,
+                    sequence: 0,
+                    hls: true,
                 });
             }
-        } else if Some(packet.stream()) == ai
-            && let Some(decoder) = &mut decoder
-        {
-            decoder.send_packet(&packet)?;
-            loop {
-                let mut frame = frame::Audio::empty();
-                if decoder.receive_frame(&mut frame).is_err() {
-                    break;
-                }
-                if frame.channel_layout().is_empty() {
-                    frame.set_channel_layout(ChannelLayout::STEREO)
-                }
-                let def = ffmpeg::software::resampling::context::Definition {
-                    format: frame.format(),
-                    channel_layout: frame.channel_layout(),
-                    rate: frame.rate(),
-                };
-                if resampler.as_ref().is_none_or(|r| r.input() != &def) {
-                    resampler = Some(ffmpeg::software::resampling::Context::get(
-                        frame.format(),
-                        frame.channel_layout(),
-                        frame.rate(),
-                        ffmpeg::format::Sample::I16(ffmpeg::format::sample::Type::Packed),
-                        ChannelLayout::STEREO,
-                        44100,
-                    )?);
-                }
-                let mut output = frame::Audio::empty();
-                resampler.as_mut().unwrap().run(&frame, &mut output)?;
-                let pcm = unsafe {
-                    std::slice::from_raw_parts(
-                        (*output.as_ptr()).data[0] as *const i16,
-                        output.samples() * 2,
-                    )
-                }
-                .to_vec();
-                sink.as_mut().unwrap().push(&pcm)?;
-                inner
-                    .shared
-                    .metrics
-                    .hls_audio_samples
-                    .fetch_add((pcm.len() / 2) as u64, Ordering::Relaxed);
-                inner.shared.pcm(Arc::new(pcm), 44100);
-            }
         }
-        if eof {
-            break;
-        }
+        Ok(())
+    })();
+    if result.is_err() || stop.load(Ordering::Acquire) || inner.stop.load(Ordering::Acquire) {
+        local_stop.store(true, Ordering::Release);
     }
-    Ok(())
+    drop(vrx);
+    let demux_result = demux
+        .join()
+        .map_err(|_| anyhow::anyhow!("HLS demux worker panicked"))?;
+    let audio_result = audio_worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("HLS audio worker panicked"))?;
+    result.and(demux_result).and(audio_result)
 }
 
 #[cfg(test)]

@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub schema_version: u32,
+    pub audio_device: String,
+    pub gpu_preference: String,
     pub name: String,
     pub mirror_width: u32,
     pub mirror_height: u32,
@@ -19,10 +22,6 @@ pub struct Settings {
     pub minimize_to_tray: bool,
     pub start_hidden: bool,
     pub autostart: bool,
-    pub recording_directory: PathBuf,
-    pub recording_codec: String,
-    pub recording_encoder: String,
-    pub recording_mbps: u32,
     pub window_width: u32,
     pub window_height: u32,
     pub hls_enabled: bool,
@@ -30,10 +29,10 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        let videos = directories::UserDirs::new()
-            .and_then(|d| d.video_dir().map(Path::to_owned))
-            .unwrap_or_else(|| PathBuf::from("recordings"));
         Self {
+            schema_version: 2,
+            audio_device: "default".into(),
+            gpu_preference: "balanced".into(),
             name: "AirPlay-Windows".into(),
             mirror_width: 2560,
             mirror_height: 1440,
@@ -48,10 +47,6 @@ impl Default for Settings {
             minimize_to_tray: false,
             start_hidden: false,
             autostart: false,
-            recording_directory: videos.join("AirPlay-Windows"),
-            recording_codec: "h264".into(),
-            recording_encoder: "auto".into(),
-            recording_mbps: 12,
             window_width: 1120,
             window_height: 760,
             hls_enabled: false,
@@ -71,14 +66,11 @@ impl Settings {
         if !(15..=240).contains(&self.max_fps) || !(15..=240).contains(&self.refresh_rate) {
             bail!("Frame rate must be 15–240")
         }
-        if !(2..=40).contains(&self.recording_mbps) {
-            bail!("Recording bitrate must be 2–40 Mbps")
+        if !["balanced", "low-power", "high-performance"].contains(&self.gpu_preference.as_str()) {
+            bail!("Invalid GPU preference")
         }
-        if !["h264", "hevc"].contains(&self.recording_codec.as_str()) {
-            bail!("Unsupported recording codec")
-        }
-        if !["auto", "gpu", "cpu"].contains(&self.recording_encoder.as_str()) {
-            bail!("Unsupported encoder selection")
+        if self.schema_version > 2 {
+            bail!("This configuration needs a newer application")
         }
         Ok(())
     }
@@ -86,9 +78,10 @@ impl Settings {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let settings: Self = serde_json::from_slice(&std::fs::read(path)?)
+        let mut settings: Self = serde_json::from_slice(&std::fs::read(path)?)
             .with_context(|| format!("Invalid settings: {}", path.display()))?;
         settings.validate()?;
+        settings.schema_version = 2;
         Ok(settings)
     }
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -131,4 +124,30 @@ pub fn data_dir() -> PathBuf {
     directories::ProjectDirs::from("", "", "AirPlay-Windows")
         .map(|p| p.config_dir().to_owned())
         .unwrap_or_else(|| PathBuf::from(".airplay-windows"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn legacy_recording_values_are_ignored_without_rewriting_file() {
+        let path = std::env::temp_dir().join(format!(
+            "airplay-config-upgrade-{}.json",
+            std::process::id()
+        ));
+        let old=br#"{"name":"Old receiver","recording_mbps":0,"recording_codec":"obsolete","recording_encoder":"removed","recording_directory":"keep/my/files"}"#;
+        std::fs::write(&path, old).unwrap();
+        let settings = Settings::load(&path).unwrap();
+        assert_eq!(settings.schema_version, 2);
+        assert_eq!(settings.name, "Old receiver");
+        assert_eq!(std::fs::read(&path).unwrap(), old);
+        let saved = serde_json::to_string(&settings).unwrap();
+        assert!(!saved.contains("recording"));
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn future_schema_is_not_silently_downgraded() {
+        let settings: Settings = serde_json::from_str(r#"{"schema_version":99}"#).unwrap();
+        assert!(settings.validate().is_err());
+    }
 }

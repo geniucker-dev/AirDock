@@ -1,89 +1,62 @@
-# AirPlay Windows — Rust / Slint edition
+# AirPlay Windows — Iced / wgpu edition
 
-This branch (`feat/rust-slint`) implements the receiver and desktop application
-in Rust, with a Slint interface. It does not link or launch the old C++ receiver.
-FFmpeg and SDL2 remain native media dependencies; Windows integration uses the
-Windows APIs directly. The C++ sources are retained as a comparison reference.
-
-**Experimental until feature and performance parity is measured on real
-Windows/iPhone hardware.** The reference is C++ commit
-`562120e4a6c85da1ec33bca88a6f438db91b8545`. Passing CI alone does not establish
-hardware parity. See [acceptance criteria](docs/RUST_ACCEPTANCE.md),
-[build instructions](docs/RUST_BUILD.md) and [validation evidence](docs/RUST_VALIDATION.md).
-
-![Rust / Slint receiver](docs/validation/receiver.png)
+A Rust AirPlay receiver with an Iced desktop interface, GPU YUV video rendering
+and cpal/WASAPI audio. Receiving continues while its presentation window is
+minimized, closed or hidden in the Windows tray. Explicit Quit shuts down the
+service and its media workers.
 
 ## Features
 
-- Native Windows discovery, persistent identity, pair verification and Rust
-  FairPlay key derivation; IPv4/IPv6, normal LAN and Windows Mobile Hotspot.
-- H.264/HEVC mirroring, aspect-preserving resizing and orientation changes.
-  Optional NVDEC → D3D11VA → CPU decoding fallback. Explicit color range/matrix
-  conversion keeps the established color behavior.
-- AAC-ELD 480/512, AAC-LC and ALAC audio; bounded RTP reordering, retransmission,
-  sequence rollover, FLUSH, pause/resume, volume, cover art and track metadata.
-- MP4 recording with audio, H.264/HEVC, automatic/GPU/CPU encoder selection,
-  bitrate and folder settings. Recording uses a separate bounded worker queue.
-- Slint receiver, recording, settings and about pages; persistent settings,
-  fullscreen, borderless UI hiding, shortcuts and device/network status.
-- Windows tray menu: restore/hide, recording, disconnect and quit. Close and
-  minimize to tray are configurable; optional start hidden and Windows autostart.
-  Tray hiding keeps networking, audio and recording active.
-- USB arrival/removal detection and the existing USB Personal Hotspot network
-  path. This uses AirPlay over the tethered network.
-- Opt-in experimental HLS/FCUP playback, playlist/segment proxying and controls.
-  FairPlay-protected streaming remains unsupported, as in the reference.
+- Existing AirPlay pairing, encrypted mirroring, RTP audio recovery and session
+  replacement behavior, with generation fencing across reconnects and FLUSH.
+- H.264 / HEVC decoding, including D3D11VA and NVDEC fallback paths.
+- Reusable NV12 / YUV420P plane textures, GPU colour conversion, aspect fit/crop
+  and full-screen presentation. No CPU YUV-to-RGBA video conversion.
+- cpal audio output with negotiated device formats, an allocation-free application
+  callback, underflow recovery and default/selected-device reconstruction.
+- Separate HLS demux/audio/video scheduling, TS/fMP4 and FCUP resource delivery.
+- Receiver/settings/diagnostic pages, cover art, volume, Windows tray restoration,
+  startup options and persistent compatible settings.
+- Recording and all related UI, configuration, encoders and output workers removed.
+  Old recording configuration values are ignored; existing user files are untouched.
+
+Video requires a compatible GPU backend. Software UI fallback supports controls
+and audio but displays an explicit video limitation. P010/10-bit, BT.2020 CL and
+HDR PQ/HLG are explicitly unsupported in this first renderer. Hardware decode
+still downloads to software YUV before upload: **this is not zero-copy**.
 
 ## Run
 
-Download a Rust Windows CI artifact, extract the entire directory and run
-`airplay-windows.exe`. Keep the included DLLs beside the executable. Allow the
-receiver through Windows Firewall on the network you use.
+```text
+airplay-windows.exe
+ airplay-windows.exe --hwaccel
+ airplay-windows.exe --start-hidden
+ airplay-windows.exe --headless --port 7000
+```
 
-Connect the iPhone and PC to the same reachable network, then choose
-**AirPlay-Windows** in iOS Screen Mirroring. A home router is optional: enable
-**Settings → Network & internet → Mobile hotspot** on Windows and join that
-hotspot from the iPhone. The app includes a button to open those settings.
-USB Personal Hotspot is another network path where the relevant Apple drivers
-and tethering are available.
+Use the same LAN or Windows mobile hotspot, then select the receiver in your
+iPhone/iPad's Screen Mirroring menu. HLS/FCUP playback can be enabled in settings.
+Settings and identity use the existing application configuration directory.
 
-Settings and receiver identity are kept in the user's application data directory,
-separately from the executable. Default recordings go into `Videos/AirPlay-Windows`.
-To run an isolated instance: `airplay-windows.exe --config-dir <directory>`.
+F11 toggles fullscreen. The Windows tray restores/hides the presentation window,
+disconnects the sender, or quits the whole application. Closing the window does
+not mean quitting the receiver.
 
-| Shortcut | Action |
-| --- | --- |
-| F11 | Toggle fullscreen |
-| Ctrl+H | Show/hide UI; hidden UI uses a draggable, resizable borderless window |
-| Ctrl+R | Start/stop recording |
-| Ctrl+D | Disconnect |
-| Escape | Leave fullscreen or restore UI |
+## Build, verification and delivery
 
-`--help` lists command-line options, including headless mode, port, receiver
-name, resolution/FPS hints, hardware decoding, logs and JSON metrics. The metrics
-count newly presented video frames, separately from decoding and UI repainting.
+See [build instructions](docs/RUST_BUILD.md), [architecture](docs/RUST_ARCHITECTURE.md),
+[validation status](docs/RUST_VALIDATION.md) and [hardware acceptance](docs/RUST_ACCEPTANCE.md).
+The Windows package uses audited LGPL FFmpeg DLLs, includes corresponding patched
+source/build material and required notices, and is tested again with a clean PATH.
+CI and manual release dispatch build the checked-out Iced implementation.
 
-## Build and CI
-
-Rust 1.99.0 is pinned. Windows builds use the separate `rust/vcpkg.json` native
-dependency manifest. See [RUST_BUILD.md](docs/RUST_BUILD.md) for reproducible commands.
-
-- `rust-ci.yml`: Windows debug/release verification and Linux protocol/media,
-  Slint and conversion performance checks.
-- `rust-windows-build.yml`: reusable build, media tests and dependency-complete
-  Windows artifact packaging, including dependency license texts.
-- `Release` (`release.yml`): manual dispatch selects the implementation from
-  the chosen commit. This Rust branch builds Cargo/Slint and publishes a clearly
-  marked Rust prerelease; C++ sources use the original CMake release job.
-- `rust-release.yml`: reusable experimental Rust publication, also triggered by
-  `rust-v*` tags. New Rust tags point at the exact build commit.
-
-The [original C++ README](docs/CPP_REFERENCE_README.md) describes the reference
-implementation and its existing CMake workflows.
+GPU readback/protocol tests do not establish real Windows/iPhone FPS, latency,
+power, device hotplug or long-term AV drift. Those measurements must compare
+both the C++ `562120e4` and Rust/Slint `43bcb0c` baselines on identical hardware.
 
 ## License
 
-GPL-3.0. See [LICENSE](LICENSE),
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the notices shipped in build
-artifacts. Slint is used under its GPL option. The independently compared Rust
-PlayFair port retains its upstream MIT attribution.
+The project license remains unchanged pending a separate audit of the existing
+Rust implementation's relationship to GPL C++ sources. Removing Slint/GPL FFmpeg
+features is not itself permission to relicense existing code. Third-party license
+texts and FFmpeg build/source materials accompany Windows distributions.

@@ -124,7 +124,7 @@ def main():
     (config / 'settings.json').write_text(json.dumps({'hardware_decode': False, 'vsync': False}))
     paths = media.generate_media(output)
     env = os.environ.copy()
-    env['SDL_AUDIODRIVER'] = 'dummy'
+    env['AIRPLAY_AUDIO_NULL'] = '1'
     port = 7013
     idle_cpu = {}
     with (output / 'receiver.log').open('w') as log:

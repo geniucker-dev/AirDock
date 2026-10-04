@@ -133,58 +133,6 @@ pub fn usb_present() -> bool {
 pub fn reveal(path: &Path) -> Result<()> {
     open(&path.to_string_lossy())
 }
-pub fn choose_folder() -> Result<Option<std::path::PathBuf>> {
-    #[cfg(windows)]
-    {
-        use windows::Win32::{
-            System::Com::{
-                CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-                CoTaskMemFree, CoUninitialize,
-            },
-            UI::Shell::{
-                FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog,
-                SIGDN_FILESYSPATH,
-            },
-        };
-        struct Com(bool);
-        impl Drop for Com {
-            fn drop(&mut self) {
-                if self.0 {
-                    unsafe { CoUninitialize() }
-                }
-            }
-        }
-        let _com = Com(unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok());
-        let dialog: IFileOpenDialog =
-            unsafe { CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER) }?;
-        unsafe {
-            dialog.SetOptions(dialog.GetOptions()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)?;
-        }
-        if unsafe { dialog.Show(None) }.is_err() {
-            return Ok(None);
-        }
-        let display = unsafe { dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH) }?;
-        let path = unsafe { display.to_string() }?;
-        unsafe { CoTaskMemFree(Some(display.as_ptr().cast())) };
-        Ok(Some(path.into()))
-    }
-    #[cfg(not(windows))]
-    {
-        let output = std::process::Command::new("zenity")
-            .args([
-                "--file-selection",
-                "--directory",
-                "--title=Recording directory",
-            ])
-            .output()?;
-        if output.status.success() {
-            Ok(Some(String::from_utf8(output.stdout)?.trim().into()))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
 #[cfg(windows)]
 pub mod tray {
     use anyhow::Result;
@@ -192,17 +140,16 @@ pub mod tray {
         Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
         menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     };
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     pub enum Command {
         Show,
         Hide,
-        Record,
         Disconnect,
         Quit,
     }
     pub struct Tray {
         _icon: TrayIcon,
-        items: Vec<(MenuItem, Command)>,
+        events: Option<futures::channel::mpsc::UnboundedReceiver<Command>>,
     }
     impl Tray {
         pub fn new() -> Result<Self> {
@@ -211,7 +158,6 @@ pub mod tray {
             for (title, command) in [
                 ("Show AirPlay-Windows", Command::Show),
                 ("Hide to tray", Command::Hide),
-                ("Start / stop recording", Command::Record),
                 ("Disconnect device", Command::Disconnect),
             ] {
                 let item = MenuItem::new(title, true, None);
@@ -241,16 +187,18 @@ pub mod tray {
                 .with_menu(Box::new(menu))
                 .with_icon(Icon::from_rgba(pixels, 32, 32)?)
                 .build()?;
-            Ok(Self { _icon: icon, items })
-        }
-        pub fn commands(&self) -> Vec<Command> {
-            let mut result = Vec::new();
-            for event in MenuEvent::receiver().try_iter() {
-                if let Some((_, c)) = self.items.iter().find(|(i, _)| i.id() == &event.id) {
-                    result.push(*c)
+            let (send, events) = futures::channel::mpsc::unbounded();
+            let ids = items
+                .iter()
+                .map(|(item, command)| (item.id().clone(), *command))
+                .collect::<Vec<_>>();
+            let menu_send = send.clone();
+            MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+                if let Some((_, command)) = ids.iter().find(|(id, _)| id == &event.id) {
+                    let _ = menu_send.unbounded_send(*command);
                 }
-            }
-            for event in TrayIconEvent::receiver().try_iter() {
+            }));
+            TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
                 if matches!(
                     event,
                     TrayIconEvent::Click {
@@ -262,10 +210,16 @@ pub mod tray {
                         ..
                     }
                 ) {
-                    result.push(Command::Show)
+                    let _ = send.unbounded_send(Command::Show);
                 }
-            }
-            result
+            }));
+            Ok(Self {
+                _icon: icon,
+                events: Some(events),
+            })
+        }
+        pub fn take_events(&mut self) -> futures::channel::mpsc::UnboundedReceiver<Command> {
+            self.events.take().expect("tray subscription starts once")
         }
     }
 }

@@ -5,9 +5,18 @@
     {
       "name": "ffmpeg",
       "default-features": false,
-      "features": ["avcodec", "avformat", "avdevice", "swscale", "swresample", "nvcodec", "amf", "x264", "x265", "ffmpeg", "ffprobe"]
-    },
-    "sdl2"
+      "features": [
+        "avcodec",
+        "avformat",
+        "swresample",
+        "nvcodec"
+      ]
+    }
   ],
-  "builtin-baseline": "9bdf622306cc71f2e605154578976af66c59af43"
+  "builtin-baseline": "9bdf622306cc71f2e605154578976af66c59af43",
+  "vcpkg-configuration": {
+    "overlay-ports": [
+      "native/ports"
+    ]
+  }
 }

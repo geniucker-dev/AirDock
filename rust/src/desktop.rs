@@ -1,128 +1,32 @@
+//! Desktop presentation only. Receiver lifetime is owned by Runtime, outside Iced.
 use crate::{
     config::{self, Settings},
-    crypto,
-    discovery::Discovery,
-    integration,
-    media::display::Display,
-    server::{Device, Server},
-    state::Shared,
+    media::VideoFrame,
+    render::{self, compositor::Renderer},
+    runtime::{self, Client, Runtime},
+    state::UiState,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use clap::Parser;
 use fs2::FileExt;
-use sdl2::{
-    event::{Event, WindowEvent as SdlWindowEvent},
-    keyboard::{Keycode, Mod},
-    mouse::MouseButton,
-    pixels::{Color, PixelFormatEnum},
-    rect::Rect,
-    video::FullscreenType,
-};
-use slint::{
-    ComponentHandle,
-    platform::{
-        self, Key, PointerEventButton, WindowEvent,
-        software_renderer::{
-            LineBufferProvider, MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType,
-        },
+use futures::{StreamExt, channel::mpsc};
+use iced::{
+    Element, Length, Subscription, Task, Theme,
+    widget::{
+        self, button, checkbox, column, container, pick_list, row, scrollable, slider, text,
+        text_input,
     },
+    window,
 };
 use std::{
-    cell::RefCell,
-    collections::VecDeque,
     fs::OpenOptions,
+    hash::{Hash, Hasher},
     path::PathBuf,
-    rc::Rc,
-    sync::{Arc, atomic::Ordering},
-    time::{Duration, Instant},
+    sync::{Arc, Mutex, atomic::Ordering},
+    time::Duration,
 };
-slint::include_modules!();
-unsafe extern "C" {
-    fn SDL_RenderSetVSync(renderer: *mut sdl2::sys::SDL_Renderer, vsync: i32) -> i32;
-}
-
-// Retain previous UI pixels in the SDL texture, not two full CPU images.
-// Slint recomposites dirty spans; stage one scanline and at most 32 upload rows.
-struct UiUpload<'a, 'texture> {
-    texture: &'a mut sdl2::render::Texture<'texture>,
-    row: &'a mut Vec<PremultipliedRgbaColor>,
-    stripe: &'a mut Vec<u8>,
-    origin: (usize, usize),
-    width: usize,
-    rows: usize,
-    error: Option<String>,
-}
-impl UiUpload<'_, '_> {
-    fn flush(&mut self) {
-        if self.rows == 0 {
-            return;
-        }
-        if self.error.is_none()
-            && let Err(error) = self.texture.update(
-                Rect::new(
-                    self.origin.0 as i32,
-                    self.origin.1 as i32,
-                    self.width as u32,
-                    self.rows as u32,
-                ),
-                self.stripe,
-                self.width * 4,
-            )
-        {
-            self.error = Some(error.to_string());
-        }
-        self.stripe.clear();
-        self.rows = 0;
-    }
-}
-impl LineBufferProvider for &mut UiUpload<'_, '_> {
-    type TargetPixel = PremultipliedRgbaColor;
-    fn process_line(
-        &mut self,
-        line: usize,
-        range: std::ops::Range<usize>,
-        render_fn: impl FnOnce(&mut [Self::TargetPixel]),
-    ) {
-        if self.rows != 0
-            && (self.origin.0 != range.start
-                || self.width != range.len()
-                || line != self.origin.1 + self.rows
-                || self.rows == 32)
-        {
-            self.flush();
-        }
-        if self.rows == 0 {
-            self.origin = (range.start, line);
-            self.width = range.len();
-        }
-        self.row
-            .resize(range.len(), PremultipliedRgbaColor::default());
-        render_fn(self.row);
-        // SDL expects straight alpha. This conversion never touches video pixels.
-        for p in self.row.iter() {
-            let a = u32::from(p.alpha);
-            self.stripe.extend_from_slice(&[
-                (u32::from(p.red) * 255)
-                    .checked_div(a)
-                    .unwrap_or(0)
-                    .min(255) as u8,
-                (u32::from(p.green) * 255)
-                    .checked_div(a)
-                    .unwrap_or(0)
-                    .min(255) as u8,
-                (u32::from(p.blue) * 255)
-                    .checked_div(a)
-                    .unwrap_or(0)
-                    .min(255) as u8,
-                p.alpha,
-            ]);
-        }
-        self.rows += 1;
-    }
-}
-
-#[derive(Parser, Debug)]
-#[command(version, about = "AirPlay receiver — native Rust + Slint edition")]
+#[derive(Parser, Clone, Debug)]
+#[command(version, about = "AirPlay receiver — Iced + wgpu / cpal")]
 struct Arguments {
     #[arg(long)]
     headless: bool,
@@ -152,114 +56,30 @@ struct Arguments {
     screenshot: Option<PathBuf>,
     #[arg(long)]
     log: Option<PathBuf>,
+    /// Explicit deterministic backend for CI; never implies a real speaker test.
+    #[arg(long)]
+    audio_null: bool,
+    #[arg(long)]
+    native_report: bool,
 }
-enum Command {
-    Fullscreen,
-    HideUi,
-    HideTray,
-    Quit,
-    Save,
-    Reset,
-    Browse,
-    OpenFolder,
-    Hotspot,
-}
-struct SdlPlatform {
-    window: Rc<MinimalSoftwareWindow>,
-    epoch: Instant,
-    clipboard: sdl2::clipboard::ClipboardUtil,
-}
-impl platform::Platform for SdlPlatform {
-    fn create_window_adapter(
-        &self,
-    ) -> std::result::Result<Rc<dyn platform::WindowAdapter>, slint::PlatformError> {
-        Ok(self.window.clone())
-    }
-    fn duration_since_start(&self) -> Duration {
-        self.epoch.elapsed()
-    }
-    fn set_clipboard_text(&self, text: &str, clipboard: platform::Clipboard) {
-        if clipboard == platform::Clipboard::DefaultClipboard {
-            let _ = self.clipboard.set_clipboard_text(text);
-        }
-    }
-    fn clipboard_text(&self, clipboard: platform::Clipboard) -> Option<String> {
-        if clipboard == platform::Clipboard::DefaultClipboard {
-            self.clipboard.clipboard_text().ok()
-        } else {
-            None
-        }
-    }
-}
-
-unsafe extern "C" fn borderless_hit_test(
-    window: *mut sdl2::sys::SDL_Window,
-    area: *const sdl2::sys::SDL_Point,
-    _: *mut libc::c_void,
-) -> sdl2::sys::SDL_HitTestResult {
-    use sdl2::sys::SDL_HitTestResult::*;
-    if window.is_null() || area.is_null() {
-        return SDL_HITTEST_NORMAL;
-    }
-    if unsafe { sdl2::sys::SDL_GetWindowFlags(window) }
-        & sdl2::sys::SDL_WindowFlags::SDL_WINDOW_FULLSCREEN as u32
-        != 0
-    {
-        return SDL_HITTEST_NORMAL;
-    }
-    let (mut width, mut height) = (0, 0);
-    unsafe {
-        sdl2::sys::SDL_GetWindowSize(window, &mut width, &mut height);
-    }
-    let point = unsafe { *area };
-    match (
-        point.x < 8,
-        point.x >= width - 8,
-        point.y < 8,
-        point.y >= height - 8,
-    ) {
-        (true, _, true, _) => SDL_HITTEST_RESIZE_TOPLEFT,
-        (_, true, true, _) => SDL_HITTEST_RESIZE_TOPRIGHT,
-        (true, _, _, true) => SDL_HITTEST_RESIZE_BOTTOMLEFT,
-        (_, true, _, true) => SDL_HITTEST_RESIZE_BOTTOMRIGHT,
-        (true, _, _, _) => SDL_HITTEST_RESIZE_LEFT,
-        (_, true, _, _) => SDL_HITTEST_RESIZE_RIGHT,
-        (_, _, true, _) => SDL_HITTEST_RESIZE_TOP,
-        (_, _, _, true) => SDL_HITTEST_RESIZE_BOTTOM,
-        _ => SDL_HITTEST_DRAGGABLE,
-    }
-}
-fn set_ui_hidden(window: &mut sdl2::video::Window, ui: &AppWindow, hidden: bool) {
-    ui.set_ui_hidden(hidden);
-    window.set_bordered(!hidden);
-    unsafe {
-        sdl2::sys::SDL_SetWindowHitTest(
-            window.raw(),
-            if hidden {
-                Some(borderless_hit_test)
-            } else {
-                None
-            },
-            std::ptr::null_mut(),
-        );
-    }
-}
-
 pub fn run() -> Result<()> {
     let args = Arguments::parse();
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "airplay_windows=info".into());
+    if args.native_report {
+        println!("{}", crate::render::native_report()?);
+        return Ok(());
+    }
+    ffmpeg_next::init()?;
     if let Some(path) = &args.log {
         let file = OpenOptions::new().create(true).append(true).open(path)?;
         tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_ansi(false)
-            .with_writer(std::sync::Mutex::new(file))
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(Mutex::new(file))
             .init();
     } else {
-        tracing_subscriber::fmt().with_env_filter(filter).init();
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .init();
     }
-    ffmpeg_next::init()?;
     let directory = args.config_dir.clone().unwrap_or_else(config::data_dir);
     std::fs::create_dir_all(&directory)?;
     let lock = OpenOptions::new()
@@ -272,8 +92,7 @@ pub fn run() -> Result<()> {
         std::fs::write(directory.join("restore-window"), b"show")?;
         return Ok(());
     }
-    let settings_path = directory.join("settings.json");
-    let mut settings = Settings::load(&settings_path)?;
+    let mut settings = Settings::load(&directory.join("settings.json"))?;
     if let Some(name) = &args.name {
         settings.name = name.clone()
     }
@@ -298,831 +117,655 @@ pub fn run() -> Result<()> {
         settings.hls_enabled = true
     }
     settings.validate()?;
-    let identity = crypto::load_identity(&directory.join("identity.key"))?;
-    let shared = Shared::new(settings.clone());
-    #[cfg(windows)]
-    {
-        // SDL 2.24+ keeps window/input coordinates in logical points and
-        // renderer output in pixels, including per-monitor DPI changes.
-        sdl2::hint::set("SDL_WINDOWS_DPI_AWARENESS", "permonitorv2");
-        sdl2::hint::set("SDL_WINDOWS_DPI_SCALING", "1");
-    }
-    let monitor_shared = shared.clone();
-    let monitor = std::thread::Builder::new()
-        .name("desktop-devices".into())
-        .spawn(move || {
-            while monitor_shared.running.load(Ordering::Acquire) {
-                let usb = integration::usb_present();
-                let addresses = if_addrs::get_if_addrs()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|a| !a.is_loopback())
-                    .map(|a| format!("{}: {}", a.name, a.ip()))
-                    .collect::<Vec<_>>()
-                    .join("  ·  ");
-                {
-                    let mut state = monitor_shared.ui.lock().unwrap();
-                    if usb != state.usb {
-                        tracing::info!(
-                            "Apple USB device {}",
-                            if usb { "connected" } else { "removed" }
-                        );
-                    }
-                    state.usb = usb;
-                    state.addresses = addresses;
-                }
-                for _ in 0..10 {
-                    if !monitor_shared.running.load(Ordering::Acquire) {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
-        })?;
-    let sdl = sdl2::init().map_err(anyhow::Error::msg)?;
-    let _audio = sdl.audio().map_err(anyhow::Error::msg)?;
-    let server = Server::start(Device::new(identity, args.port, shared.clone())?)?;
-    let mut discovery = match Discovery::start(server.device()) {
-        Ok(d) => Some(d),
-        Err(e) => {
-            shared.report(format!("Discovery unavailable: {e:#}"));
-            None
+    render::compositor::PREFERENCE.store(
+        match settings.gpu_preference.as_str() {
+            "high-performance" => 2,
+            "low-power" => 1,
+            _ => 0,
+        },
+        Ordering::Relaxed,
+    );
+    // Set once, before any threads exist; runtime selection does not mutate the process environment.
+    if args.audio_null {
+        unsafe {
+            std::env::set_var("AIRPLAY_AUDIO_NULL", "1");
         }
-    };
+    }
+    let mut runtime = Runtime::start(directory.clone(), args.port, settings.clone())?;
     tracing::info!(
         "AirPlay listening on port {} as {}",
         args.port,
         settings.name
     );
     let result = if args.headless {
-        headless(&args, &shared, &sdl)
+        while runtime.client.shared.running.load(Ordering::Acquire) {
+            if args
+                .exit_after
+                .is_some_and(|s| runtime.client.shared.started.elapsed() >= Duration::from_secs(s))
+            {
+                break;
+            }
+            let guard = runtime.client.shared.media.display.latest.lock().unwrap();
+            let _ = runtime
+                .client
+                .shared
+                .media
+                .display
+                .ready
+                .wait_timeout(guard, Duration::from_millis(100));
+        }
+        Ok(())
     } else {
-        gui(
-            &args,
-            &shared,
-            &sdl,
-            &directory,
-            &settings_path,
-            server.device(),
-            &mut discovery,
+        let client = runtime.client.clone();
+        let a = args.clone();
+        iced::daemon(
+            move || {
+                App::boot(
+                    client.clone(),
+                    settings.clone(),
+                    directory.clone(),
+                    a.clone(),
+                )
+            },
+            App::update,
+            App::view,
         )
+        .title(|_: &App, _| "AirPlay-Windows".to_owned())
+        .theme(|_: &App, _| Theme::TokyoNight)
+        .subscription(App::subscription)
+        .run()
+        .map_err(Into::into)
     };
-    shared.running.store(false, Ordering::Release);
-    let _ = monitor.join();
-    drop(discovery);
-    drop(server);
-    shared.finish_recordings();
+    runtime.stop();
     if let Some(path) = args.metrics {
-        std::fs::write(path, serde_json::to_vec_pretty(&shared.snapshot())?)?;
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(&runtime.client.shared.snapshot())?,
+        )?;
     }
     result
 }
-fn headless(args: &Arguments, shared: &Arc<Shared>, sdl: &sdl2::Sdl) -> Result<()> {
-    let mut pump = sdl.event_pump().map_err(anyhow::Error::msg)?;
-    while shared.running.load(Ordering::Acquire) {
-        if args
-            .exit_after
-            .is_some_and(|s| shared.started.elapsed() >= Duration::from_secs(s))
-        {
-            break;
-        }
-        if pump.poll_iter().any(|e| matches!(e, Event::Quit { .. })) {
-            break;
-        }
-        shared.frame.lock().unwrap().take();
-        shared.wait_for_frame(Duration::from_millis(50));
-    }
-    Ok(())
+#[derive(Clone, Debug)]
+enum Message {
+    Frame,
+    Status,
+    Tick,
+    Opened,
+    Window(window::Id, window::Event),
+    Minimized(bool),
+    Page(u8),
+    Fullscreen,
+    Crop,
+    Focus,
+    Escape,
+    Hide,
+    Quit,
+    Disconnect,
+    ClearError,
+    Save,
+    Reset,
+    Name(String),
+    Width(String),
+    Height(String),
+    Fps(String),
+    Gpu(String),
+    Audio(crate::audio::DeviceChoice),
+    Hardware(bool),
+    Hevc(bool),
+    Vsync(bool),
+    Hls(bool),
+    MinimizeTray(bool),
+    Autostart(bool),
+    StartHidden(bool),
+    Volume(f32),
+    Devices(Result<Vec<crate::audio::DeviceChoice>, String>),
+    Screenshot(window::Screenshot),
+    #[cfg(windows)]
+    Tray(crate::integration::tray::Command),
 }
-#[allow(clippy::too_many_arguments)] // The UI owns these process resources on its main thread.
-fn gui(
-    args: &Arguments,
-    shared: &Arc<Shared>,
-    sdl: &sdl2::Sdl,
-    directory: &std::path::Path,
-    settings_path: &std::path::Path,
-    device: &Device,
-    discovery: &mut Option<Discovery>,
-) -> Result<()> {
-    let settings = shared.settings.read().unwrap().clone();
-    let video = sdl.video().map_err(anyhow::Error::msg)?;
-    let mut builder = video.window(
-        "AirPlay-Windows",
-        settings.window_width,
-        settings.window_height,
-    );
-    builder.position_centered().resizable().allow_highdpi();
-    let mut window = builder.build()?;
-    window.set_minimum_size(900, 620)?;
-    let mut canvas = window.into_canvas().build()?;
-    unsafe {
-        SDL_RenderSetVSync(canvas.raw(), i32::from(settings.vsync));
+#[derive(Clone)]
+struct FrameEvents(Arc<Mutex<Option<mpsc::Receiver<()>>>>, bool);
+impl Hash for FrameEvents {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        (Arc::as_ptr(&self.0) as usize).hash(h)
     }
-    let creator = canvas.texture_creator();
-    let mut display = Display::default();
-    let adapter = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-    platform::set_platform(Box::new(SdlPlatform {
-        window: adapter.clone(),
-        epoch: Instant::now(),
-        clipboard: video.clipboard(),
-    }))
-    .map_err(|e| anyhow::anyhow!("Slint platform: {e}"))?;
-    let ui = AppWindow::new()?;
-    load_settings(&ui, &settings);
-    set_ui_hidden(canvas.window_mut(), &ui, settings.hide_ui);
-    let actions = Rc::new(RefCell::new(VecDeque::new()));
-    macro_rules! action {
-        ($callback:ident,$command:expr) => {
-            let q = actions.clone();
-            ui.$callback(move || q.borrow_mut().push_back($command));
-        };
+}
+impl PartialEq for FrameEvents {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
-    action!(on_fullscreen, Command::Fullscreen);
-    action!(on_hide_ui, Command::HideUi);
-    action!(on_hide_tray, Command::HideTray);
-    action!(on_quit, Command::Quit);
-    action!(on_save_settings, Command::Save);
-    action!(on_reset_settings, Command::Reset);
-    action!(on_browse_folder, Command::Browse);
-    action!(on_open_folder, Command::OpenFolder);
-    action!(on_open_hotspot, Command::Hotspot);
+}
+impl Eq for FrameEvents {}
+fn frame_events(events: &FrameEvents) -> impl futures::Stream<Item = Message> + use<> {
     {
-        let s = shared.clone();
-        ui.on_disconnect(move || s.request_disconnect());
-    }
-    {
-        let s = shared.clone();
-        ui.on_toggle_recording(move || toggle_recording(&s));
-    }
-    {
-        let s = shared.clone();
-        ui.on_clear_error(move || s.ui.lock().unwrap().error.clear());
-    }
-    #[cfg(windows)]
-    let tray = match integration::tray::Tray::new() {
-        Ok(t) => Some(t),
-        Err(e) => {
-            shared.report(format!("System tray unavailable: {e}"));
-            None
-        }
-    };
-    #[cfg(windows)]
-    let tray_available = tray.is_some();
-    #[cfg(not(windows))]
-    let tray_available = false;
-    ui.set_tray_available(tray_available);
-    let mut visible = !(tray_available && (args.start_hidden || settings.start_hidden));
-    if !visible {
-        canvas.window_mut().hide();
-    }
-    if settings.fullscreen {
-        canvas
-            .window_mut()
-            .set_fullscreen(FullscreenType::Desktop)
-            .map_err(anyhow::Error::msg)?;
-    }
-    ui.show()?;
-    video.text_input().start();
-    let mut pump = sdl.event_pump().map_err(anyhow::Error::msg)?;
-    let mut dimensions = (0, 0);
-    let mut ui_texture = None;
-    let mut ui_full_repaint = true;
-    let mut ui_row = Vec::<PremultipliedRgbaColor>::new();
-    let mut ui_stripe = Vec::<u8>::new();
-    let mut scale = 1f32;
-    let mut mouse = (0, 0);
-    let mut last_status = Instant::now() - Duration::from_secs(1);
-    let mut last_rate = Instant::now();
-    let mut last_presented = 0;
-    let mut last_decoded = 0;
-    let mut fps = 0.;
-    let mut decoded_fps = 0.;
-    let mut last_cover = Arc::new(Vec::new());
-    let mut video_active = false;
-    let mut redraw = true;
-    let mut screenshot_written = false;
-    let _ = std::fs::remove_file(directory.join("restore-window"));
-    while shared.running.load(Ordering::Acquire) {
-        if args
-            .exit_after
-            .is_some_and(|s| shared.started.elapsed() >= Duration::from_secs(s))
-        {
-            break;
-        }
-        for event in pump.poll_iter() {
-            match event {
-                Event::Quit { .. }
-                | Event::Window {
-                    win_event: SdlWindowEvent::Close,
-                    ..
-                } => {
-                    if tray_available && shared.settings.read().unwrap().close_to_tray {
-                        actions.borrow_mut().push_back(Command::HideTray)
-                    } else {
-                        actions.borrow_mut().push_back(Command::Quit)
-                    }
-                }
-                Event::Window {
-                    win_event: SdlWindowEvent::Minimized,
-                    ..
-                } => {
-                    if tray_available && shared.settings.read().unwrap().minimize_to_tray {
-                        actions.borrow_mut().push_back(Command::HideTray)
-                    }
-                }
-                Event::Window {
-                    win_event:
-                        SdlWindowEvent::Shown | SdlWindowEvent::Restored | SdlWindowEvent::Exposed,
-                    ..
-                } => {
-                    redraw = true;
-                }
-                Event::Window {
-                    win_event: SdlWindowEvent::Hidden,
-                    ..
-                } => redraw = true,
-                Event::Window {
-                    win_event: SdlWindowEvent::FocusGained,
-                    ..
-                } => adapter.dispatch_event(WindowEvent::WindowActiveChanged(true)),
-                Event::Window {
-                    win_event: SdlWindowEvent::FocusLost,
-                    ..
-                } => adapter.dispatch_event(WindowEvent::WindowActiveChanged(false)),
-                Event::MouseMotion { x, y, .. } => {
-                    mouse = (x, y);
-                    adapter.dispatch_event(WindowEvent::PointerMoved {
-                        position: slint::LogicalPosition::new(x as f32, y as f32),
-                    });
-                }
-                Event::MouseButtonDown {
-                    x, y, mouse_btn, ..
-                }
-                | Event::MouseButtonUp {
-                    x, y, mouse_btn, ..
-                } => {
-                    let position = slint::LogicalPosition::new(x as f32, y as f32);
-                    let button = pointer_button(mouse_btn);
-                    if matches!(event, Event::MouseButtonDown { .. }) {
-                        adapter.dispatch_event(WindowEvent::PointerPressed { position, button })
-                    } else {
-                        adapter.dispatch_event(WindowEvent::PointerReleased { position, button })
-                    }
-                }
-                Event::MouseWheel {
-                    precise_x,
-                    precise_y,
-                    ..
-                } => adapter.dispatch_event(WindowEvent::PointerScrolled {
-                    position: slint::LogicalPosition::new(mouse.0 as f32, mouse.1 as f32),
-                    delta_x: precise_x * 32.,
-                    delta_y: precise_y * 32.,
-                }),
-                Event::TextInput { text, .. } => {
-                    for c in text.chars() {
-                        adapter.dispatch_event(WindowEvent::KeyPressed {
-                            text: c.to_string().into(),
-                        });
-                        adapter.dispatch_event(WindowEvent::KeyReleased {
-                            text: c.to_string().into(),
-                        });
-                    }
-                }
-                Event::KeyDown {
-                    keycode: Some(key),
-                    keymod,
-                    repeat,
-                    ..
-                } => {
-                    let ctrl = keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD);
-                    let command = match key {
-                        Keycode::F11 => Some(Command::Fullscreen),
-                        Keycode::H if ctrl => Some(Command::HideUi),
-                        Keycode::R if ctrl => {
-                            if !repeat {
-                                toggle_recording(shared)
-                            }
-                            None
-                        }
-                        Keycode::D if ctrl => {
-                            if !repeat {
-                                shared.request_disconnect()
-                            }
-                            None
-                        }
-                        Keycode::Escape => {
-                            if canvas.window().fullscreen_state() != FullscreenType::Off {
-                                Some(Command::Fullscreen)
-                            } else {
-                                set_ui_hidden(canvas.window_mut(), &ui, false);
-                                None
-                            }
-                        }
-                        _ => None,
-                    };
-                    if let Some(command) = command {
-                        if !repeat {
-                            actions.borrow_mut().push_back(command)
-                        }
-                    } else if let Some(text) = key_text(key, ctrl) {
-                        adapter.dispatch_event(if repeat {
-                            WindowEvent::KeyPressRepeated { text }
-                        } else {
-                            WindowEvent::KeyPressed { text }
-                        })
-                    }
-                }
-                Event::KeyUp {
-                    keycode: Some(key),
-                    keymod,
-                    ..
-                } => {
-                    if let Some(text) =
-                        key_text(key, keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD))
-                    {
-                        adapter.dispatch_event(WindowEvent::KeyReleased { text })
-                    }
-                }
-                _ => {}
-            }
-        }
-        #[cfg(windows)]
-        if let Some(tray) = &tray {
-            for command in tray.commands() {
-                use integration::tray::Command as T;
-                match command {
-                    T::Show => {
-                        canvas.window_mut().show();
-                        canvas.window_mut().raise();
-                        redraw = true;
-                    }
-                    T::Hide => actions.borrow_mut().push_back(Command::HideTray),
-                    T::Record => toggle_recording(shared),
-                    T::Disconnect => shared.request_disconnect(),
-                    T::Quit => actions.borrow_mut().push_back(Command::Quit),
-                }
-            }
-        }
-        while let Some(command) = actions.borrow_mut().pop_front() {
-            let result: Result<()> = (|| {
-                match command {
-                    Command::Fullscreen => {
-                        let mode = if canvas.window().fullscreen_state() == FullscreenType::Off {
-                            FullscreenType::Desktop
-                        } else {
-                            FullscreenType::Off
-                        };
-                        canvas
-                            .window_mut()
-                            .set_fullscreen(mode)
-                            .map_err(anyhow::Error::msg)?;
-                    }
-                    Command::HideUi => set_ui_hidden(canvas.window_mut(), &ui, !ui.get_ui_hidden()),
-                    Command::HideTray => {
-                        if tray_available {
-                            canvas.window_mut().hide();
-                        }
-                    }
-                    Command::Quit => shared.running.store(false, Ordering::Release),
-                    Command::Save => {
-                        let previous = shared.settings.read().unwrap().clone();
-                        let mut next = read_settings(&ui, previous.clone())?;
-                        next.hide_ui = ui.get_ui_hidden();
-                        next.fullscreen = canvas.window().fullscreen_state() != FullscreenType::Off;
-                        if next.autostart != previous.autostart {
-                            integration::autostart(next.autostart)?;
-                        }
-                        next.save(settings_path)?;
-                        *shared.settings.write().unwrap() = next.clone();
-                        unsafe {
-                            SDL_RenderSetVSync(canvas.raw(), i32::from(next.vsync));
-                        }
-                        if next.name != previous.name
-                            || next.hevc_enabled != previous.hevc_enabled
-                            || next.hls_enabled != previous.hls_enabled
-                        {
-                            *discovery = None;
-                            *discovery = Some(Discovery::start(device)?);
-                        }
-                        ui.set_status("Settings saved".into());
-                    }
-                    Command::Reset => load_settings(&ui, &Settings::default()),
-                    Command::Browse => {
-                        if let Some(folder) = integration::choose_folder()? {
-                            ui.set_recording_directory(folder.to_string_lossy().as_ref().into());
-                        }
-                    }
-                    Command::OpenFolder => {
-                        integration::reveal(&PathBuf::from(ui.get_recording_directory().as_str()))?
-                    }
-                    Command::Hotspot => integration::open("ms-settings:network-mobilehotspot")?,
-                }
-                Ok(())
-            })();
-            if let Err(e) = result {
-                shared.report(format!("{e:#}"));
-            }
-            redraw = true;
-        }
-        let flags = canvas.window().window_flags();
-        visible = flags & sdl2::sys::SDL_WindowFlags::SDL_WINDOW_SHOWN as u32 != 0
-            && flags & sdl2::sys::SDL_WindowFlags::SDL_WINDOW_MINIMIZED as u32 == 0;
-        platform::update_timers_and_animations();
-        let new_dimensions = canvas.output_size().map_err(anyhow::Error::msg)?;
-        let logical = canvas.window().size();
-        let new_scale = new_dimensions.0 as f32 / logical.0.max(1) as f32;
-        if dimensions != new_dimensions || (scale - new_scale).abs() > f32::EPSILON {
-            dimensions = new_dimensions;
-            scale = new_scale;
-            adapter.dispatch_event(WindowEvent::ScaleFactorChanged {
-                scale_factor: scale,
-            });
-            adapter.set_size(slint::PhysicalSize::new(dimensions.0, dimensions.1));
-            adapter.dispatch_event(WindowEvent::Resized {
-                size: slint::LogicalSize::new(logical.0 as f32, logical.1 as f32),
-            });
-            ui_texture = None;
-            redraw = true;
-        }
-        if !visible || ui.get_ui_hidden() {
-            ui_texture = None;
-        } else if ui_texture.is_none() {
-            let mut texture = creator.create_texture_streaming(
-                PixelFormatEnum::RGBA32,
-                dimensions.0,
-                dimensions.1,
-            )?;
-            texture.set_blend_mode(sdl2::render::BlendMode::Blend);
-            ui_texture = Some(texture);
-            ui_full_repaint = true;
-            adapter.request_redraw();
-            redraw = true;
-        }
-        if last_status.elapsed() >= Duration::from_millis(200) {
-            let state = shared.ui.lock().unwrap().clone();
-            let connected = !state.peer.is_empty();
-            ui.set_connected(connected);
-            ui.set_device_name(
-                if connected {
-                    if state.device.is_empty() {
-                        state.peer.clone()
-                    } else {
-                        state.device.clone()
-                    }
+        let status = events.1;
+        events
+            .0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("subscription starts once")
+            .map(move |_| {
+                if status {
+                    Message::Status
                 } else {
-                    "No device connected".into()
+                    Message::Frame
                 }
-                .into(),
-            );
-            ui.set_peer(state.peer.into());
-            ui.set_codec(state.codec.into());
-            ui.set_dimensions(state.dimensions.into());
-            ui.set_decoder(state.decoder.into());
-            ui.set_paused(state.paused);
-            ui.set_error(state.error.into());
-            ui.set_recording(shared.recording.load(Ordering::Relaxed));
-            ui.set_recording_path(state.recording_path.into());
-            let progress = (state.progress_seconds
-                + if state.paused {
-                    0.
-                } else {
-                    state.progress_at.map_or(0., |t| t.elapsed().as_secs_f64())
-                })
-            .min(state.duration_seconds);
-            ui.set_progress_ratio(if state.duration_seconds > 0. {
-                (progress / state.duration_seconds) as f32
-            } else {
-                0.
-            });
-            let elapsed = progress as u64;
-            let total = state.duration_seconds as u64;
-            ui.set_progress_text(if total > 0 {
-                format!(
-                    "{}:{:02} / {}:{:02}",
-                    elapsed / 60,
-                    elapsed % 60,
-                    total / 60,
-                    total % 60
-                )
-                .into()
-            } else {
-                "".into()
-            });
-            ui.set_track_title(if state.title.is_empty() {
-                if state.kind == "Screen mirroring" {
-                    "Waiting for video…".into()
-                } else {
-                    "Audio streaming".into()
-                }
-            } else {
-                state.title.into()
-            });
-            ui.set_track_artist(state.artist.into());
-            ui.set_track_album(state.album.into());
-            ui.set_status(
-                if connected {
-                    "Connected · ".to_owned() + &state.kind
-                } else {
-                    "Ready to connect".into()
-                }
-                .into(),
-            );
-            if !Arc::ptr_eq(&state.cover, &last_cover) {
-                ui.set_cover(cover_image(&state.cover).unwrap_or_default());
-                last_cover = state.cover;
-            }
-            if !connected {
-                display.clear();
-                video_active = false;
-                ui.set_video_active(false);
-            }
-            if last_rate.elapsed() >= Duration::from_secs(1) {
-                let p = shared.metrics.presented.load(Ordering::Relaxed);
-                let d = shared.metrics.decoded.load(Ordering::Relaxed);
-                let t = last_rate.elapsed().as_secs_f64();
-                fps = (p - last_presented) as f64 / t;
-                decoded_fps = (d - last_decoded) as f64 / t;
-                last_presented = p;
-                last_decoded = d;
-                last_rate = Instant::now();
-                let devices = shared.ui.lock().unwrap();
-                ui.set_addresses(devices.addresses.as_str().into());
-                ui.set_usb_status(
-                    if devices.usb {
-                        "Apple USB device detected · Trust this computer / enable Personal Hotspot"
-                    } else {
-                        "No USB device detected"
-                    }
-                    .into(),
-                );
-            }
-            ui.set_stats(format!("{fps:.1} FPS presented · {decoded_fps:.1} decoded · {:.1} ms · {} capture drops",shared.metrics.latency_us.load(Ordering::Relaxed) as f64/1000.,shared.metrics.recording_dropped.load(Ordering::Relaxed)).into());
-            last_status = Instant::now();
-            if directory.join("restore-window").exists() {
-                let _ = std::fs::remove_file(directory.join("restore-window"));
-                canvas.window_mut().show();
-                canvas.window_mut().raise();
-                redraw = true;
-            }
-        }
-        let frame = if visible {
-            shared.frame.lock().unwrap().take()
-        } else {
-            None
-        };
-        let mut presented_origin = None;
-        if let Some(frame) = frame
-            && visible
-        {
-            display.upload(&creator, &frame.frame)?;
-            video_active = true;
-            ui.set_video_active(true);
-            redraw = true;
-            presented_origin = Some(frame.received);
-        }
-        let mut upload_error = None;
-        let dirty = if visible && !ui.get_ui_hidden() {
-            adapter.draw_if_needed(|renderer| {
-                if ui_full_repaint {
-                    renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
-                }
-                let mut upload = UiUpload {
-                    texture: ui_texture.as_mut().unwrap(),
-                    row: &mut ui_row,
-                    stripe: &mut ui_stripe,
-                    origin: (0, 0),
-                    width: 0,
-                    rows: 0,
-                    error: None,
-                };
-                renderer.render_by_line(&mut upload);
-                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
-                ui_full_repaint = false;
-                upload.flush();
-                upload_error = upload.error;
             })
-        } else {
-            false
+    }
+}
+#[cfg(windows)]
+#[derive(Clone)]
+struct TrayEvents(Arc<Mutex<Option<mpsc::UnboundedReceiver<crate::integration::tray::Command>>>>);
+#[cfg(windows)]
+impl Hash for TrayEvents {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        (Arc::as_ptr(&self.0) as usize).hash(h)
+    }
+}
+#[cfg(windows)]
+impl PartialEq for TrayEvents {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+#[cfg(windows)]
+impl Eq for TrayEvents {}
+#[cfg(windows)]
+fn tray_events(events: &TrayEvents) -> impl futures::Stream<Item = Message> + use<> {
+    events
+        .0
+        .lock()
+        .unwrap()
+        .take()
+        .expect("tray events start once")
+        .map(Message::Tray)
+}
+struct App {
+    client: Client,
+    settings: Settings,
+    directory: PathBuf,
+    args: Arguments,
+    status: UiState,
+    frame: Option<Arc<VideoFrame>>,
+    events: FrameEvents,
+    status_events: FrameEvents,
+    window: Option<window::Id>,
+    page: u8,
+    fullscreen: bool,
+    crop: bool,
+    focus: bool,
+    gpu_warning: bool,
+    width: String,
+    height: String,
+    fps: String,
+    devices: Vec<crate::audio::DeviceChoice>,
+    cover: Option<widget::image::Handle>,
+    cover_source: Arc<Vec<u8>>,
+    last_capture: bool,
+    last_metrics: u64,
+    metrics_text: String,
+    #[cfg(windows)]
+    tray: Option<crate::integration::tray::Tray>,
+    #[cfg(windows)]
+    tray_events: TrayEvents,
+}
+impl App {
+    fn boot(
+        client: Client,
+        settings: Settings,
+        directory: PathBuf,
+        args: Arguments,
+    ) -> (Self, Task<Message>) {
+        let (sender, receiver) = mpsc::channel(1);
+        *client.shared.media.display.wake.lock().unwrap() = Some(sender);
+        let (status_sender, status_receiver) = mpsc::channel(1);
+        *client.shared.ui.wake.lock().unwrap() = Some(status_sender);
+        #[cfg(windows)]
+        let mut tray = crate::integration::tray::Tray::new()
+            .map_err(|e| client.shared.report(format!("Tray unavailable: {e:#}")))
+            .ok();
+        #[cfg(windows)]
+        let tray_events = TrayEvents(Arc::new(Mutex::new(tray.as_mut().map(|t| t.take_events()))));
+        let hidden = (args.start_hidden || settings.start_hidden) && cfg!(windows);
+        let mut app = Self {
+            client,
+            events: FrameEvents(Arc::new(Mutex::new(Some(receiver))), false),
+            status_events: FrameEvents(Arc::new(Mutex::new(Some(status_receiver))), true),
+            status: UiState::default(),
+            frame: None,
+            window: None,
+            page: 0,
+            fullscreen: settings.fullscreen,
+            crop: false,
+            focus: settings.hide_ui,
+            gpu_warning: false,
+            width: settings.mirror_width.to_string(),
+            height: settings.mirror_height.to_string(),
+            fps: settings.max_fps.to_string(),
+            devices: vec![crate::audio::DeviceChoice::default_output()],
+            cover: None,
+            cover_source: Arc::new(Vec::new()),
+            last_capture: false,
+            last_metrics: 0,
+            metrics_text: String::new(),
+            #[cfg(windows)]
+            tray,
+            #[cfg(windows)]
+            tray_events,
+            settings,
+            directory,
+            args,
         };
-        if let Some(e) = upload_error {
-            return Err(anyhow::anyhow!(e));
-        }
-        if !screenshot_written
-            && args.screenshot.is_some()
-            && shared.started.elapsed() > Duration::from_secs(1)
+        let task = if hidden && app.tray_available() {
+            Task::none()
+        } else {
+            app.open_window()
+        };
+        (app, task)
+    }
+    fn tray_available(&self) -> bool {
+        #[cfg(windows)]
         {
-            redraw = true;
+            self.tray.is_some()
         }
-        if visible && (redraw || dirty) {
-            canvas.set_draw_color(Color::RGB(10, 13, 19));
-            canvas.clear();
-            let viewport = Rect::new(
-                (ui.get_viewport_x() * scale) as i32,
-                (ui.get_viewport_y() * scale) as i32,
-                (ui.get_viewport_width() * scale).max(1.) as u32,
-                (ui.get_viewport_height() * scale).max(1.) as u32,
-            );
-            if video_active && (ui.get_page() == 0 || ui.get_ui_hidden()) {
-                display.draw(&mut canvas, viewport)?;
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+    fn open_window(&mut self) -> Task<Message> {
+        if let Some(id) = self.window {
+            return window::gain_focus(id);
+        }
+        let (id, task) = window::open(window::Settings {
+            size: iced::Size::new(
+                self.settings.window_width as f32,
+                self.settings.window_height as f32,
+            ),
+            min_size: Some(iced::Size::new(760., 520.)),
+            exit_on_close_request: false,
+            fullscreen: self.fullscreen,
+            ..Default::default()
+        });
+        self.window = Some(id);
+        self.client
+            .shared
+            .media
+            .display
+            .visible
+            .store(true, Ordering::Release);
+        self.client.shared.ui.visible.store(true, Ordering::Release);
+        task.map(|_| Message::Opened)
+    }
+    fn subscription(&self) -> Subscription<Message> {
+        #[allow(unused_mut)]
+        let mut subscriptions = vec![
+            Subscription::run_with(self.events.clone(), frame_events),
+            Subscription::run_with(self.status_events.clone(), frame_events),
+            window::events().filter_map(|(id, event)| {
+                (!matches!(event, window::Event::RedrawRequested(_)))
+                    .then_some(Message::Window(id, event))
+            }),
+            iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick),
+            iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key, modifiers, ..
+                }) => match key {
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::F11) => {
+                        Some(Message::Fullscreen)
+                    }
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape) => {
+                        Some(Message::Escape)
+                    }
+                    iced::keyboard::Key::Character(c) if modifiers.control() => match c.as_str() {
+                        "h" | "H" => Some(Message::Focus),
+                        "d" | "D" => Some(Message::Disconnect),
+                        "q" | "Q" => Some(Message::Quit),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            }),
+        ];
+        #[cfg(windows)]
+        if self.tray.is_some() {
+            subscriptions.push(Subscription::run_with(
+                self.tray_events.clone(),
+                tray_events,
+            ));
+        }
+        Subscription::batch(subscriptions)
+    }
+    fn refresh(&mut self) {
+        self.status = self.client.shared.ui.lock().unwrap().clone();
+        let epoch = self.client.shared.generation();
+        self.frame = self
+            .client
+            .shared
+            .media
+            .display
+            .latest
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|f| f.epoch == epoch)
+            .cloned();
+        if !Arc::ptr_eq(&self.status.cover, &self.cover_source) {
+            self.cover_source = self.status.cover.clone();
+            self.cover = (!self.cover_source.is_empty())
+                .then(|| widget::image::Handle::from_bytes((*self.cover_source).clone()));
+        }
+    }
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Opened | Message::Frame | Message::Status => self.refresh(),
+            Message::Tick => {
+                self.refresh();
+                if self.directory.join("restore-window").exists() {
+                    let _ = std::fs::remove_file(self.directory.join("restore-window"));
+                    return self.open_window();
+                }
+                let gpu = render::compositor::STATUS.load(Ordering::Acquire);
+                if gpu == 3 {
+                    self.status.error="Video unavailable: no compatible GPU. Software fallback supports controls and audio only.".into()
+                }
+                if gpu == 5 {
+                    self.status.error = "GPU device lost; recovery failed. The receiver and audio remain active. Restart the application to restore video.".into();
+                    if !self.gpu_warning {
+                        self.gpu_warning = true;
+                        self.client
+                            .shared
+                            .media
+                            .display
+                            .visible
+                            .store(false, Ordering::Release);
+                        crate::integration::startup_error(&self.status.error);
+                    }
+                }
+                let n = self.client.shared.metrics.presented.load(Ordering::Relaxed);
+                self.metrics_text = format!(
+                    "{} new video submissions/s · {} decoded · {:.1} ms processing",
+                    n.saturating_sub(self.last_metrics),
+                    self.client.shared.metrics.decoded.load(Ordering::Relaxed),
+                    self.client
+                        .shared
+                        .metrics
+                        .latency_us
+                        .load(Ordering::Relaxed) as f64
+                        / 1000.
+                );
+                self.last_metrics = n;
+                if self
+                    .args
+                    .exit_after
+                    .is_some_and(|s| self.client.shared.started.elapsed() >= Duration::from_secs(s))
+                {
+                    return Task::done(Message::Quit);
+                }
+                if !self.last_capture
+                    && self.args.screenshot.is_some()
+                    && self.client.shared.started.elapsed() > Duration::from_secs(1)
+                {
+                    self.last_capture = true;
+                    if let Some(id) = self.window {
+                        return window::screenshot(id).map(Message::Screenshot);
+                    }
+                }
+                if let Some(id) = self.window {
+                    return window::is_minimized(id)
+                        .map(|v| Message::Minimized(v.unwrap_or(false)));
+                }
             }
-            if let Some(texture) = ui_texture.as_ref() {
-                if video_active && ui.get_page() == 0 {
-                    // The active receiver page has UI only around the video.
-                    // Avoid blending a full-window transparent image every frame.
-                    let side = (230. * scale).ceil() as u32;
-                    let header = (76. * scale).ceil() as u32;
-                    let footer = (52. * scale).ceil() as u32;
-                    for rect in [
-                        Rect::new(0, 0, side, dimensions.1),
-                        Rect::new(side as i32, 0, dimensions.0 - side, header),
-                        Rect::new(
-                            side as i32,
-                            (dimensions.1 - footer) as i32,
-                            dimensions.0 - side,
-                            footer,
-                        ),
-                    ] {
-                        canvas
-                            .copy(texture, rect, rect)
-                            .map_err(anyhow::Error::msg)?;
-                    }
-                    if !ui.get_error().is_empty() {
-                        let rect = Rect::new(
-                            (246. * scale) as i32,
-                            (84. * scale) as i32,
-                            ((logical.0 as f32 - 262.) * scale).max(1.) as u32,
-                            (64. * scale).ceil() as u32,
-                        );
-                        canvas
-                            .copy(texture, rect, rect)
-                            .map_err(anyhow::Error::msg)?;
-                    }
+            Message::Window(id, window::Event::CloseRequested) => {
+                self.client
+                    .shared
+                    .media
+                    .display
+                    .visible
+                    .store(false, Ordering::Release);
+                self.client
+                    .shared
+                    .ui
+                    .visible
+                    .store(false, Ordering::Release);
+                if self.tray_available() {
+                    self.window = None;
+                    return window::close(id);
                 } else {
-                    canvas
-                        .copy(texture, None, None)
-                        .map_err(anyhow::Error::msg)?;
+                    return window::minimize(id, true);
                 }
             }
-            if !screenshot_written
-                && shared.started.elapsed() > Duration::from_secs(1)
-                && let Some(path) = &args.screenshot
-            {
-                let buffer = canvas
-                    .read_pixels(None, PixelFormatEnum::RGBA32)
-                    .map_err(anyhow::Error::msg)?;
-                image::save_buffer(
-                    path,
-                    &buffer,
-                    dimensions.0,
-                    dimensions.1,
-                    image::ColorType::Rgba8,
-                )?;
-                screenshot_written = true;
-            }
-            canvas.present();
-            if let Some(origin) = presented_origin
-                && (ui.get_page() == 0 || ui.get_ui_hidden())
-            {
-                shared.metrics.presented.fetch_add(1, Ordering::Relaxed);
-                let latency = origin.elapsed().as_micros() as u64;
-                shared.metrics.latency_us.store(latency, Ordering::Relaxed);
-                let mut samples = shared.metrics.latency_samples.lock().unwrap();
-                if samples.len() == 4096 {
-                    samples.pop_front();
+            Message::Window(_, window::Event::Resized(size)) => {
+                if !self.fullscreen {
+                    self.settings.window_width = size.width as u32;
+                    self.settings.window_height = size.height as u32;
                 }
-                samples.push_back(latency);
             }
-            redraw = false;
+            Message::Window(_, _) => {}
+            Message::Minimized(minimized) => {
+                self.client
+                    .shared
+                    .media
+                    .display
+                    .visible
+                    .store(!minimized, Ordering::Release);
+                self.client
+                    .shared
+                    .ui
+                    .visible
+                    .store(!minimized, Ordering::Release);
+                if minimized && self.settings.minimize_to_tray && self.tray_available() {
+                    return Task::done(Message::Hide);
+                }
+            }
+            Message::Page(page) => {
+                self.page = page;
+                if page == 1 {
+                    return Task::perform(
+                        async { crate::audio::devices().map_err(|e| format!("{e:#}")) },
+                        Message::Devices,
+                    );
+                }
+            }
+            Message::Devices(result) => match result {
+                Ok(devices) => self.devices = devices,
+                Err(e) => self.client.shared.report(e),
+            },
+            Message::Fullscreen => {
+                self.fullscreen = !self.fullscreen;
+                self.settings.fullscreen = self.fullscreen;
+                if let Some(id) = self.window {
+                    return window::set_mode(
+                        id,
+                        if self.fullscreen {
+                            window::Mode::Fullscreen
+                        } else {
+                            window::Mode::Windowed
+                        },
+                    );
+                }
+            }
+            Message::Crop => self.crop = !self.crop,
+            Message::Focus => {
+                self.focus = !self.focus;
+                self.settings.hide_ui = self.focus;
+            }
+            Message::Escape => {
+                if self.fullscreen {
+                    return Task::done(Message::Fullscreen);
+                }
+                if self.focus {
+                    return Task::done(Message::Focus);
+                }
+            }
+            Message::Hide => {
+                if self.tray_available() {
+                    self.client
+                        .shared
+                        .media
+                        .display
+                        .visible
+                        .store(false, Ordering::Release);
+                    self.client
+                        .shared
+                        .ui
+                        .visible
+                        .store(false, Ordering::Release);
+                    if let Some(id) = self.window.take() {
+                        return window::close(id);
+                    }
+                }
+            }
+
+            Message::Quit => return iced::exit(),
+            Message::Disconnect => {
+                let _ = self.client.commands.try_send(runtime::Command::Disconnect);
+            }
+            Message::ClearError => self.client.shared.ui.lock().unwrap().error.clear(),
+            Message::Save => {
+                let result = (|| -> Result<()> {
+                    self.settings.mirror_width = self.width.parse()?;
+                    self.settings.mirror_height = self.height.parse()?;
+                    self.settings.max_fps = self.fps.parse()?;
+                    self.settings.refresh_rate = self.settings.max_fps;
+                    self.settings.validate()?;
+                    Ok(())
+                })();
+                if let Err(e) = result {
+                    self.client.shared.report(format!("{e:#}"))
+                } else {
+                    let _ = self
+                        .client
+                        .commands
+                        .try_send(runtime::Command::Settings(self.settings.clone()));
+                }
+            }
+            Message::Reset => {
+                self.settings = Settings::default();
+                self.width = self.settings.mirror_width.to_string();
+                self.height = self.settings.mirror_height.to_string();
+                self.fps = self.settings.max_fps.to_string();
+            }
+            Message::Name(v) => self.settings.name = v,
+            Message::Width(v) => self.width = v,
+            Message::Height(v) => self.height = v,
+            Message::Fps(v) => self.fps = v,
+            Message::Gpu(v) => self.settings.gpu_preference = v,
+            Message::Audio(v) => self.settings.audio_device = v.id,
+            Message::Hardware(v) => self.settings.hardware_decode = v,
+            Message::Hevc(v) => self.settings.hevc_enabled = v,
+            Message::Vsync(v) => self.settings.vsync = v,
+            Message::Hls(v) => self.settings.hls_enabled = v,
+            Message::MinimizeTray(v) => self.settings.minimize_to_tray = v,
+            Message::Autostart(v) => self.settings.autostart = v,
+            Message::StartHidden(v) => self.settings.start_hidden = v,
+            Message::Volume(v) => {
+                self.client.shared.ui.lock().unwrap().volume_db = v;
+            }
+            Message::Screenshot(capture) => {
+                if let Some(path) = &self.args.screenshot
+                    && let Err(e) = image::save_buffer(
+                        path,
+                        &capture.rgba,
+                        capture.size.width,
+                        capture.size.height,
+                        image::ColorType::Rgba8,
+                    )
+                {
+                    self.client.shared.report(format!("Screenshot: {e}"));
+                }
+            }
+            #[cfg(windows)]
+            Message::Tray(command) => {
+                return Task::done(match command {
+                    crate::integration::tray::Command::Show => return self.open_window(),
+                    crate::integration::tray::Command::Hide => Message::Hide,
+                    crate::integration::tray::Command::Disconnect => Message::Disconnect,
+                    crate::integration::tray::Command::Quit => Message::Quit,
+                });
+            }
         }
-        if !visible {
-            shared.wait_for_activity(Duration::from_millis(20));
-        } else if !redraw {
-            shared.wait_for_frame(Duration::from_millis(if visible && video_active {
-                8
+        Task::none()
+    }
+    fn view(&self, _: window::Id) -> Element<'_, Message, Theme, Renderer> {
+        let navigation = column![
+            text("AIRPLAY").size(13),
+            text("Windows").size(25),
+            text("RECEIVER").size(11),
+            widget::space().height(24),
+            button("Receive")
+                .on_press(Message::Page(0))
+                .width(Length::Fill),
+            button("Settings")
+                .on_press(Message::Page(1))
+                .width(Length::Fill),
+            button("Diagnostics")
+                .on_press(Message::Page(2))
+                .width(Length::Fill),
+            widget::space().height(Length::Fill),
+            text("Service stays active\nin the system tray").size(12),
+            button("Hide to tray").on_press_maybe(self.tray_available().then_some(Message::Hide)),
+            button("Quit").on_press(Message::Quit)
+        ]
+        .spacing(12)
+        .padding(22)
+        .width(190);
+        let content:Element<'_,Message,Theme,Renderer>=match self.page {
+            1=>scrollable(column![text("Receiver settings").size(28),text("Network and decoder settings apply to the next connection. GPU selection applies on restart. Audio output changes immediately.").size(13),text_input("Receiver name",&self.settings.name).on_input(Message::Name),row![text_input("Width",&self.width).on_input(Message::Width),text_input("Height",&self.height).on_input(Message::Height),text_input("FPS",&self.fps).on_input(Message::Fps)].spacing(10),checkbox(self.settings.hardware_decode).label("Hardware decoding").on_toggle(Message::Hardware),checkbox(self.settings.hevc_enabled).label("Advertise HEVC").on_toggle(Message::Hevc),checkbox(self.settings.vsync).label("VSync (restart)").on_toggle(Message::Vsync),checkbox(self.settings.hls_enabled).label("HLS / FCUP playback").on_toggle(Message::Hls),text("Render adapter preference"),pick_list(vec!["balanced".to_string(),"low-power".into(),"high-performance".into()],Some(self.settings.gpu_preference.clone()),Message::Gpu),text("Audio output"),pick_list(self.devices.clone(),self.devices.iter().find(|d|d.id==self.settings.audio_device).cloned(),Message::Audio),checkbox(self.settings.minimize_to_tray).label("Minimize to tray").on_toggle(Message::MinimizeTray),checkbox(self.settings.start_hidden).label("Start in tray").on_toggle(Message::StartHidden),checkbox(self.settings.autostart).label("Start with Windows").on_toggle(Message::Autostart),row![button("Save settings").on_press(Message::Save),button("Reset form").on_press(Message::Reset)].spacing(12)].spacing(16).padding(28)).into(),
+            2=>column![text("Diagnostics").size(28),text(&self.metrics_text),text(format!("Source: {}\nCodec: {}\nDecoder: {}\nDimensions: {}\nAudio: {}",self.status.peer,self.status.codec,self.status.decoder,self.status.dimensions,self.status.audio_status)),text(&self.status.addresses).size(13),text("Iced + wgpu · cpal / WASAPI · FFmpeg LGPL DLL profile"),text("Counters describe new GPU submissions, not measured screen scanout. Hardware performance and end-to-end AV latency require Windows/iPhone acceptance measurements.").size(13),text(format!("Version {}",env!("CARGO_PKG_VERSION")))].spacing(22).padding(28).into(),
+            _=>{
+                let video:Element<'_,Message,Theme,Renderer>=if let Some(frame)=&self.frame {
+                    if render::compositor::STATUS.load(Ordering::Acquire)==3{container(text("Video requires a compatible GPU").size(22)).center(Length::Fill).into()}
+                    else{widget::shader(render::Video{frame:frame.clone(),shared:self.client.shared.clone(),crop:self.crop}).width(Length::Fill).height(Length::Fill).into()}
+                }else{
+                    let title=if self.status.peer.is_empty(){"Ready to receive"}else if self.status.kind=="Audio"{"Audio playback"}else{"Waiting for video"};
+                    let mut ready=column![text(title).size(29),text(&self.settings.name).size(20),text(if self.status.peer.is_empty(){"Open Screen Mirroring on your iPhone or iPad.\nConnect through your LAN or Windows mobile hotspot."}else{&self.status.title}).size(14)].spacing(16).align_x(iced::Alignment::Center);
+                    if let Some(cover)=&self.cover{ready=ready.push(widget::image(cover.clone()).width(180).height(180));}
+                    if !self.status.artist.is_empty(){ready=ready.push(text(&self.status.artist));}
+                    container(ready).center(Length::Fill).into()
+                };
+                column![row![text(if self.status.device.is_empty(){"Your screen, here"}else{&self.status.device}).size(24),widget::space().width(Length::Fill),button("Disconnect").on_press_maybe((!self.status.peer.is_empty()).then_some(Message::Disconnect))].spacing(12),container(video).width(Length::Fill).height(Length::Fill).style(|_|container::Style{background:Some(iced::Color::from_rgb8(9,12,20).into()),border:iced::Border{radius:12.into(),..Default::default()},..Default::default()}),row![button("Fullscreen · F11").on_press(Message::Fullscreen),button(if self.crop{"Fit"}else{"Fill / crop"}).on_press(Message::Crop),widget::space().width(Length::Fill),text("Volume"),slider(-60.0..=0.,self.status.volume_db,Message::Volume).width(140)].spacing(14).align_y(iced::Alignment::Center)].spacing(20).padding(24).into()
+            }
+        };
+        let mut body = column![content].height(Length::Fill);
+        if !self.status.error.is_empty() {
+            body = body.push(
+                container(
+                    row![
+                        text(&self.status.error).size(13),
+                        button("Dismiss").on_press(Message::ClearError)
+                    ]
+                    .spacing(12),
+                )
+                .padding(12)
+                .style(container::rounded_box),
+            );
+        }
+        if self.focus && self.page == 0 {
+            return container(if let Some(frame) = &self.frame {
+                Element::from(
+                    widget::shader(render::Video {
+                        frame: frame.clone(),
+                        shared: self.client.shared.clone(),
+                        crop: self.crop,
+                    })
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+                )
             } else {
-                20
-            }));
+                Element::from(
+                    container(text("Waiting for video · Ctrl+H to show controls"))
+                        .center(Length::Fill),
+                )
+            })
+            .height(Length::Fill)
+            .width(Length::Fill)
+            .into();
         }
+        container(row![navigation, body].height(Length::Fill))
+            .height(Length::Fill)
+            .into()
     }
-    let mut settings = shared.settings.read().unwrap().clone();
-    let (w, h) = canvas.window().size();
-    if canvas.window().fullscreen_state() == FullscreenType::Off {
-        settings.window_width = w;
-        settings.window_height = h;
-    }
-    settings.fullscreen = canvas.window().fullscreen_state() != FullscreenType::Off;
-    settings.hide_ui = ui.get_ui_hidden();
-    settings.save(settings_path)?;
-    ui.hide()?;
-    Ok(())
-}
-fn toggle_recording(shared: &Shared) {
-    if shared.recording.load(Ordering::Relaxed) {
-        shared.stop_recording()
-    } else {
-        // An encoder may have failed asynchronously; retire its old worker
-        // before retrying so the next frame creates a fresh recorder.
-        shared.stop_recording();
-        shared.recording.store(true, Ordering::Relaxed)
-    }
-}
-fn pointer_button(b: MouseButton) -> PointerEventButton {
-    match b {
-        MouseButton::Left => PointerEventButton::Left,
-        MouseButton::Right => PointerEventButton::Right,
-        MouseButton::Middle => PointerEventButton::Middle,
-        _ => PointerEventButton::Other,
-    }
-}
-fn key_text(key: Keycode, ctrl: bool) -> Option<slint::SharedString> {
-    let special = match key {
-        Keycode::Backspace => Key::Backspace,
-        Keycode::Delete => Key::Delete,
-        Keycode::Return | Keycode::KpEnter => Key::Return,
-        Keycode::Tab => Key::Tab,
-        Keycode::Left => Key::LeftArrow,
-        Keycode::Right => Key::RightArrow,
-        Keycode::Up => Key::UpArrow,
-        Keycode::Down => Key::DownArrow,
-        Keycode::Home => Key::Home,
-        Keycode::End => Key::End,
-        Keycode::LShift | Keycode::RShift => Key::Shift,
-        Keycode::LCtrl | Keycode::RCtrl => Key::Control,
-        Keycode::LAlt | Keycode::RAlt => Key::Alt,
-        Keycode::Escape => Key::Escape,
-        _ => {
-            return if ctrl {
-                let name = key.name().to_lowercase();
-                (name.len() == 1).then(|| name.into())
-            } else {
-                None
-            };
-        }
-    };
-    Some(special.into())
-}
-fn load_settings(ui: &AppWindow, s: &Settings) {
-    ui.set_receiver_name(s.name.as_str().into());
-    ui.set_resolution_width(s.mirror_width.to_string().into());
-    ui.set_resolution_height(s.mirror_height.to_string().into());
-    ui.set_fps(s.max_fps.to_string().into());
-    ui.set_refresh(s.refresh_rate.to_string().into());
-    ui.set_hevc(s.hevc_enabled);
-    ui.set_hardware(s.hardware_decode);
-    ui.set_vsync(s.vsync);
-    ui.set_close_tray(s.close_to_tray);
-    ui.set_minimize_tray(s.minimize_to_tray);
-    ui.set_start_hidden(s.start_hidden);
-    ui.set_autostart(s.autostart);
-    ui.set_hls(s.hls_enabled);
-    ui.set_recording_directory(s.recording_directory.to_string_lossy().as_ref().into());
-    ui.set_recording_codec(i32::from(s.recording_codec == "hevc"));
-    ui.set_recording_encoder(match s.recording_encoder.as_str() {
-        "gpu" => 1,
-        "cpu" => 2,
-        _ => 0,
-    });
-    ui.set_bitrate(s.recording_mbps.to_string().into());
-}
-fn read_settings(ui: &AppWindow, mut s: Settings) -> Result<Settings> {
-    s.name = ui.get_receiver_name().trim().into();
-    s.mirror_width = ui.get_resolution_width().parse()?;
-    s.mirror_height = ui.get_resolution_height().parse()?;
-    s.max_fps = ui.get_fps().parse()?;
-    s.refresh_rate = ui.get_refresh().parse()?;
-    s.hevc_enabled = ui.get_hevc();
-    s.hardware_decode = ui.get_hardware();
-    s.vsync = ui.get_vsync();
-    s.close_to_tray = ui.get_close_tray();
-    s.minimize_to_tray = ui.get_minimize_tray();
-    s.start_hidden = ui.get_start_hidden();
-    s.autostart = ui.get_autostart();
-    s.hls_enabled = ui.get_hls();
-    s.recording_directory = PathBuf::from(ui.get_recording_directory().as_str());
-    s.recording_codec = if ui.get_recording_codec() == 1 {
-        "hevc"
-    } else {
-        "h264"
-    }
-    .into();
-    s.recording_encoder = match ui.get_recording_encoder() {
-        1 => "gpu",
-        2 => "cpu",
-        _ => "auto",
-    }
-    .into();
-    s.recording_mbps = ui.get_bitrate().parse()?;
-    s.validate()?;
-    Ok(s)
-}
-fn cover_image(bytes: &[u8]) -> Result<slint::Image> {
-    let reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
-    let decoder = reader.into_decoder()?;
-    use image::ImageDecoder;
-    let (w, h) = decoder.dimensions();
-    ensure!(w <= 4096 && h <= 4096, "Cover image too large");
-    let rgba = image::DynamicImage::from_decoder(decoder)?.to_rgba8();
-    let buffer =
-        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(rgba.as_raw(), w, h);
-    Ok(slint::Image::from_rgba8(buffer))
 }

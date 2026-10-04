@@ -14,20 +14,20 @@ from rust_integration import ROOT, pair, run, wait_listener
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', required=True, type=pathlib.Path)
+    parser.add_argument('--fmp4',action='store_true')
     args = parser.parse_args()
     output = ROOT / 'rust-validation' / 'hls'
     output.mkdir(parents=True, exist_ok=True)
-    run('ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=128x96:rate=30',
-        '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100', '-t', '1',
-        '-c:v', 'libx264', '-preset', 'ultrafast', '-bf', '2', '-g', '15',
-        '-c:a', 'aac', '-b:a', '128k', '-hls_time', '0.5', '-hls_list_size', '0',
-        '-hls_segment_filename', output / 'segment%03d.ts', '-y', output / 'video.m3u8')
+    import shutil
+    fixtures=ROOT/'rust/tests/fixtures/media/hls'
+    for source in fixtures.iterdir():
+        shutil.copy2(source,output/source.name)
     prefix = 'mlhls://fixture/'
     resources = {prefix + 'master.m3u8': b'#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=400000\nvideo.m3u8\n',
-                 prefix + 'video.m3u8': (output / 'video.m3u8').read_bytes().replace(b'#EXT-X-TARGETDURATION:0', b'#EXT-X-TARGETDURATION:1')}
-    resources.update({prefix + p.name: p.read_bytes() for p in output.glob('segment*.ts')})
+                 prefix + 'video.m3u8': (output / ('fmp4.m3u8' if args.fmp4 else 'video.m3u8')).read_bytes().replace(b'#EXT-X-TARGETDURATION:0', b'#EXT-X-TARGETDURATION:1')}
+    resources.update({prefix + p.name: p.read_bytes() for p in output.iterdir() if p.suffix in ['.ts','.m4s','.mp4']})
     env = os.environ.copy()
-    env['SDL_AUDIODRIVER'] = 'dummy'
+    env['AIRPLAY_AUDIO_NULL'] = '1'
     port = 7014
     session = 'rust-hls-fixture'
     headers = {'X-Apple-Session-ID': session, 'Content-Type': 'application/x-apple-binary-plist'}

@@ -132,6 +132,7 @@ pub fn mirror(
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
     let state = shared.clone();
+    let owner_id = shared.owner.lock().unwrap().as_ref().map(|o| o.id);
     let worker = Worker::start("mirror-video", shared, None, move |stop| {
         while !stop.load(Ordering::Acquire) {
             match listener.accept() {
@@ -146,7 +147,12 @@ pub fn mirror(
                         stream.set_nodelay(true)?;
                         let mut cipher = crypto::mirror_cipher(&key, connection);
                         let mut decoder: Option<video::Decoder> = None;
+                        let mut decode_epoch = state.generation();
                         loop {
+                            if state.owner.lock().unwrap().as_ref().map(|o| o.id) != owner_id {
+                                break;
+                            }
+                            let epoch = state.generation();
                             let mut header = [0; 128];
                             if !read_exact_cancel(&mut stream, &mut header, &stop)? {
                                 break;
@@ -180,7 +186,18 @@ pub fn mirror(
                                 0x0000 | 0x0010 => {
                                     cipher.apply_keystream(&mut payload);
                                     if let Some(d) = decoder.as_mut() {
-                                        match d.decode_mirror(&mut payload, kind == 0x0010) {
+                                        if decode_epoch != epoch {
+                                            d.flush();
+                                            decode_epoch = epoch;
+                                        }
+                                        let source_pts = crate::playback::MediaTime::ntp(
+                                            u64::from_le_bytes(header[8..16].try_into()?),
+                                        );
+                                        match d.decode_mirror_at(
+                                            &mut payload,
+                                            kind == 0x0010,
+                                            source_pts.map(|t| t.micros()),
+                                        ) {
                                             Ok(frames) => {
                                                 for frame in frames {
                                                     {
@@ -192,10 +209,14 @@ pub fn mirror(
                                                         );
                                                         ui.decoder = d.backend().into();
                                                     }
+                                                    let pts=frame.timestamp().map(crate::playback::MediaTime::microseconds).or(source_pts);
                                                     state.publish(VideoFrame {
                                                         frame,
                                                         received,
-                                                        timeline: state.started.elapsed(),
+                                                        pts,
+                                                        epoch,
+                                                        sequence: 0,
+                                                        hls: false,
                                                     });
                                                 }
                                             }
@@ -276,7 +297,7 @@ pub fn audio(
     let data_port = data.local_addr()?.port();
     let control_port = control.local_addr()?.port();
     let decoder = audio::Decoder::new(options.ct, options.rate, options.channels, options.spf)?;
-    let sink = audio::Sink::new(options.rate, options.channels)?;
+    let sink = audio::Sink::for_session(options.rate, options.channels, &shared)?;
     let poller = Arc::new(Poller::new()?);
     let wake = poller.clone();
     let (send, recv) = mpsc::channel();
@@ -335,6 +356,8 @@ fn run_audio(
                     AudioCommand::Flush(sequence) => {
                         recovery.reset(sequence, now);
                         decoder.flush();
+                        state.reset_media();
+                        sink.set_epoch(state.generation());
                         sink.flush();
                         timestamp = None;
                         flush_until = now + 500;
@@ -350,6 +373,15 @@ fn run_audio(
                         Ok((n, from)) if from.ip() == peer.ip() => {
                             if is_control {
                                 endpoint = from;
+                            }
+                            if is_control && n >= 20 && bytes[1] & 0x7f == 0x54 {
+                                let rtp = u32::from_be_bytes(bytes[4..8].try_into()?);
+                                let ntp = u64::from_be_bytes(bytes[8..16].try_into()?);
+                                if let Some(time) = crate::playback::MediaTime::ntp(ntp) {
+                                    *state.media.audio_sync.lock().unwrap() =
+                                        Some((rtp, time.micros(), options.rate));
+                                }
+                                continue;
                             }
                             let resent = n > 1 && bytes[1] & 0x7f == 0x56;
                             if let Some(mut packet) = rtp::parse(&bytes[..n]) {
@@ -436,7 +468,17 @@ fn run_audio(
                             last_active = now;
                             state.ui.lock().unwrap().paused = false;
                         }
-                        sink.push(&pcm)?;
+                        let pts = state
+                            .media
+                            .audio_sync
+                            .lock()
+                            .unwrap()
+                            .map(|(rtp, us, rate)| {
+                                us + (packet.timestamp.wrapping_sub(rtp) as i32 as i64) * 1_000_000
+                                    / rate as i64
+                            });
+                        sink.volume(state.ui.lock().unwrap().volume_db);
+                        sink.push_at(&pcm, pts)?;
                         let stereo = if options.channels == 2 {
                             pcm
                         } else {
@@ -474,24 +516,19 @@ fn run_audio(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ffmpeg_next::{self as ffmpeg, ChannelLayout, codec, frame};
+    use ffmpeg_next as ffmpeg;
     fn encode_alac(value: i16) -> Vec<u8> {
-        let c = ffmpeg::encoder::find(codec::Id::ALAC).unwrap();
-        let mut e = codec::Context::new_with_codec(c).encoder().audio().unwrap();
-        e.set_rate(44100);
-        e.set_channel_layout(ChannelLayout::STEREO);
-        e.set_format(ffmpeg::format::Sample::I16(
-            ffmpeg::format::sample::Type::Planar,
-        ));
-        let mut e = e.open_as(c).unwrap();
-        let mut f = frame::Audio::new(e.format(), 352, ChannelLayout::STEREO);
-        f.set_rate(44100);
-        f.plane_mut::<i16>(0).fill(value);
-        f.plane_mut::<i16>(1).fill(value);
-        e.send_frame(&f).unwrap();
-        let mut p = ffmpeg::Packet::empty();
-        e.receive_packet(&mut p).unwrap();
-        p.data().unwrap().to_vec()
+        match value {
+            10 => include_bytes!("../../tests/fixtures/alac-10.bin").as_slice(),
+            20 => include_bytes!("../../tests/fixtures/alac-20.bin").as_slice(),
+            30 => include_bytes!("../../tests/fixtures/alac-30.bin").as_slice(),
+            50 => include_bytes!("../../tests/fixtures/alac-50.bin").as_slice(),
+            55 => include_bytes!("../../tests/fixtures/alac-55.bin").as_slice(),
+            60 => include_bytes!("../../tests/fixtures/alac-60.bin").as_slice(),
+            99 => include_bytes!("../../tests/fixtures/alac-99.bin").as_slice(),
+            _ => panic!("Missing test fixture"),
+        }
+        .to_vec()
     }
     fn packet(sequence: u16, timestamp: u32, plain: &[u8]) -> Vec<u8> {
         use cbc::cipher::{BlockEncryptMut, KeyIvInit};
@@ -562,15 +599,6 @@ mod tests {
     #[test]
     fn encrypted_udp_audio_recovers_loss_wrap_flush_and_long_pause() {
         ffmpeg::init().unwrap();
-        unsafe {
-            sdl2::sys::SDL_SetMainReady();
-            sdl2::sys::SDL_SetHintWithPriority(
-                c"SDL_AUDIODRIVER".as_ptr(),
-                c"dummy".as_ptr(),
-                sdl2::sys::SDL_HintPriority::SDL_HINT_OVERRIDE,
-            );
-            assert_eq!(sdl2::sys::SDL_InitSubSystem(sdl2::sys::SDL_INIT_AUDIO), 0);
-        }
         for ip in ["127.0.0.1", "::1"] {
             let (shared, sender, data, control, stream) = setup(ip, 2, 352);
             let first = packet(65534, 0xfffffe00, &encode_alac(10));

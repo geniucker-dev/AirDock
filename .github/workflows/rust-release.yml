@@ -39,4 +39,4 @@ jobs:
           files: airplay-windows-${{ env.RUST_RELEASE_TAG }}-x64.zip
           prerelease: true
           generate_release_notes: true
-          body: 'Rust + Slint experimental build. Automated protocol/media checks are required before packaging. Windows/iPhone feature and performance acceptance remains subject to docs/RUST_ACCEPTANCE.md; this build does not replace the C++ stable release.'
+          body: 'Iced/wgpu + cpal experimental build. Automated protocol/media checks are required before packaging. Windows/iPhone feature and performance acceptance remains subject to docs/RUST_ACCEPTANCE.md; this build does not replace the C++ stable release.'

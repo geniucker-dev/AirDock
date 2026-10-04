@@ -1,31 +1,38 @@
-# Rust branch additions
+# Third-party notices for the Iced edition
 
-The Rust receiver does not link the C++ application or its OpenSSL/libplist/
-ImGui/SDL_ttf dependencies described below. Those notices remain applicable to
-reference sources and independent test oracles retained in this repository.
+The application remains GPL-3.0-only. Replacing UI/audio dependencies does not
+by itself change the license or establish independence from historical sources.
+A separate source relationship review is required before any license change.
 
-- **Slint 1.18.1**: GPL-3.0-only / commercial / Slint Royalty-free options;
-  this GPL application uses the GPL option. https://slint.dev/
-- **Rust PlayFair port and data**: derived from nored/airfry's Rust port of
-  doubletake's PlayFair implementation, MIT. The original license and attribution
-  are retained in `rust/src/playfair_data/AIRFRY-LICENSE.txt` and `NOTICE.md`.
-  The implementation is independently compared against the bundled C oracle;
-  its promoted 8-bit rotation semantics have been corrected to match that oracle.
-  https://github.com/nored/airfry
-- **Rust dependencies**: exact versions are locked in Cargo.lock. Distribution
-  artifacts include their license texts and an SPDX/repository index generated
-  from the locked Cargo source metadata (`rust-licenses/index.json`).
-- **Native FFmpeg distribution**: the Rust Windows manifest enables x264/x265;
-  those build components make the distributed FFmpeg GPL rather than a
-  minimal LGPL-only build. The package includes vcpkg dependency copyright and
-  license files. FFmpeg: https://ffmpeg.org/ ; x264: https://www.videolan.org/developers/x264.html ;
-  x265: https://www.videolan.org/developers/x265.html .
-- **SDL2**: zlib license, https://www.libsdl.org/ . Used for media presentation,
-  audio and the native window hosting Slint's cached software-rendered UI.
-- **AAC-ELD fixture generator**: test-only FDK-AAC dependency; never linked into
-  the application. See `rust/tests/fixtures/README.md` for fixture provenance.
+- **Iced** (0.14): MIT. https://github.com/iced-rs/iced
+- **wgpu** (27): MIT OR Apache-2.0. https://github.com/gfx-rs/wgpu
+- **cpal** (0.18): Apache-2.0. https://github.com/RustAudio/cpal
+- **FFmpeg**: Windows DLLs use the pinned playback-only LGPL-2.1-or-later build,
+  with GPL/nonfree features, all encoders and muxers disabled. No x264/x265/NVENC
+  encoding libraries are included. D3D11VA/NVDEC/CUVID decoding remains enabled.
+  The package includes license texts, patched corresponding FFmpeg source and
+  exact vcpkg build materials. Actual DLL versions/configuration/hashes and
+  runtime dependency closure are recorded in NATIVE_AUDIT.json. https://ffmpeg.org/
+- **vcpkg FFmpeg build port**: Microsoft/vcpkg, MIT; copied from the pinned
+  manifest baseline and modified to disable encoding and archive patched source.
+  Its license accompanies the overlay. https://github.com/microsoft/vcpkg
+- **Rust dependencies**: Cargo.lock pins versions. Distribution artifacts include
+  source license texts and SPDX/repository metadata in rust-licenses/index.json.
+- **Rust PlayFair implementation/data**: existing port derived from nored/airfry;
+  existing license and notices remain in rust/src/playfair_data/. This migration
+  does not make new claims about its authorization or provenance.
+- **Test fixtures**: synthetic media, generated independently; no device captures
+  or copyrighted media. See rust/tests/fixtures/README.md. External fixture
+  generators/encoders and the GPL C differential oracle are test tools and are
+  not linked or distributed as application runtime dependencies.
 
-# Third-Party Notices
+Slint, SDL, recording workers and video encoders are removed from this edition.
+
+The following notices describe the historical C++ sources retained in Git history
+and independent protocol test references. They do not describe dependencies of
+the Iced application. Original attributions are retained for source review.
+
+# Historical C++ reference notices
 
 This project ships, links against, or fetches at build time the
 components listed below. Each entry states the upstream source, the

@@ -261,6 +261,7 @@ impl Session {
             ready: Default::default(),
         });
         *owner = Some(lease.clone());
+        self.device.shared.reset_media();
         self.lease = Some(lease);
         self.claimed = true;
         Ok(true)
@@ -283,10 +284,9 @@ impl Session {
                     ..Default::default()
                 };
             }
-            *self.device.shared.frame.lock().unwrap() = None;
+            self.device.shared.reset_media();
             drop(owner);
             self.device.hls.stop();
-            self.device.shared.stop_recording();
         }
         self.claimed = false;
         if let Some(lease) = self.lease.take() {

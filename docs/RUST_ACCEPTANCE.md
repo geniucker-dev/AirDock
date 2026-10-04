@@ -1,58 +1,61 @@
-# Rust / Slint acceptance
+# Iced / wgpu migration acceptance
 
-Reference: C++ commit `562120e4a6c85da1ec33bca88a6f438db91b8545`.
-The Rust branch is accepted only when functionality and performance match the
-reference. Compilation or a successful connection alone is not acceptance.
+Frozen references: C++ `562120e4a6c85da1ec33bca88a6f438db91b8545` and
+Rust/Slint `43bcb0ca8a7d659159290ff81bfa65ba3d627b9d`.
+Recording is deliberately removed from the migration scope and comparisons.
+The project license remains unchanged pending a separate source relationship review.
 
-## Required functionality
+## Automatic gates
 
-- Native Windows discovery, persistent identity, pair-setup/pair-verify and
-  FairPlay key recovery; IPv4, IPv6 and Windows Mobile Hotspot connectivity.
-- H.264 / HEVC mirroring, orientation and resolution changes, software decode
-  and hardware decode with fallback; all supported range/matrix combinations.
-- AAC-ELD 480/512-frame variants and ALAC, loss recovery, reordering, sequence
-  wrap, FLUSH fencing, volume, pause/resume, cover art and track metadata.
-- Synchronized MP4 video/audio recording, H.264/HEVC, automatic/GPU/CPU encoder
-  selection, bitrate and output folder, with bounded recording queues.
-- Fullscreen, aspect-preserving resizing, UI hiding, keyboard shortcuts,
-  disconnect, persistent settings, Unicode paths and high-DPI behavior.
-- Close/minimize to tray, restore, tray recording/disconnect/quit commands,
-  optional start with Windows and start hidden. Closing to tray keeps sessions
-  alive; Quit flushes recordings and stops networking.
-- USB arrival/removal information and the existing Personal Hotspot path.
-- Existing experimental HLS behavior remains opt-in; unsupported DRM playback
-  is not advertised as supported.
-- Windows debug/release CI, core/integration tests, protocol conformance,
-  dependency-complete downloadable builds and a separate Rust release workflow.
+- Rust format, warning-free Clippy, unit regressions and debug/release builds.
+- Independent protocol vectors, encrypted H.264/HEVC streams, resolution changes,
+  AAC-ELD/ALAC packets, RTP loss/reordering/wrap, FLUSH and repeated reconnects.
+- HLS TS and fMP4 proxy/demux/decode, cancellation and audio/video sample counts.
+- Production WGSL shader readback for NV12/YUV420P, six SDR matrices,
+  limited/full range and linear/sRGB render targets. RGB error at most 2/255.
+- Invalid stride/buffer extents and unsupported 10-bit/HDR input are rejected.
+- Audio callback allocation guard, negotiated sample conversion, ring publication,
+  generation isolation, pause and starvation; legacy configuration compatibility.
+- Iced pages, fullscreen/focus restoration, resizing and settings save under Xvfb.
+- Locked dependency audit and actual packaged Windows DLL license/configuration,
+  decoder/demuxer/protocol availability, recursive normal/delayed PE imports,
+  hashes, corresponding patched FFmpeg source and build materials.
+- Playback tests using only the packaged DLL directory and Windows system paths.
 
-## Automated gates
+CI uses deterministic null audio where explicitly configured. It verifies decoded
+PCM and callback logic, not physical WASAPI output, hotplug or audible synchronization.
+Software Vulkan shader readback verifies arithmetic, not hardware playback performance.
 
-Use independent inputs and the C++ reference, not only Rust round trips:
-pair-verify Python harness, FairPlay differential vectors, actual AAC/ALAC
-packets, captured/generated H.264/HEVC, RTP loss/wrap/FLUSH cases, malformed
-request bounds, recordings read back with ffprobe, and reference YUV values.
-Maximum RGB error against the established reference must stay below 3/255.
-Benchmarks report actual decoded/presented new frames, queue sizes and latency;
-UI redraw frequency is not reported as video frame rate.
+## Same-device physical comparison
 
-## Windows / iPhone performance gate
+Test all three release builds on the same Windows PC, monitor, iPhone, network,
+resolution, codec, volume and decoder preference. Record GPU/driver, power mode,
+Windows/iOS versions and exact binary hashes. Use at least five alternating runs
+per case after identical warm-up. Include 1080p/1440p/4K and 60/120 Hz where the
+source/device support them, H.264/HEVC, hardware/software decode, LAN/hotspot,
+windowed/fullscreen and tray restore. Distinguish playing, idle and hidden states.
 
-Run both release builds on the same PC, display, iPhone, network and settings.
-Alternate builds, at least five paired runs, after equal warm-up. Include
-1080p, 1440p and 4K where the phone supports them; 60/120 Hz where supported;
-H.264/HEVC; software/hardware decode; Wi-Fi/hotspot/USB network; recording
-on/off; fullscreen and tray restore. Record the exact hardware and OS versions.
+Capture actual unique displayed frames and dropped source frames independently
+(e.g. synchronized frame-number test patterns and high-speed capture); distinguish
+ETW/PresentMon present events from new video frames and from physical scanout.
+Collect P95/P99 new-frame intervals, local processing delay, observed end-to-end
+AV offset and 30-minute drift, CPU/GPU load, private memory and dedicated/shared
+GPU memory. `present()` return duration is never an end-to-end latency measurement.
 
-- Actual new-frame presentation rate: Rust median at least 95% of reference;
-  no new recurring stalls. Investigate differences within measurement noise.
-- Local pipeline latency: Rust p95 no more than one display refresh interval
-  above reference; report absolute and paired differences.
-- CPU and steady-state memory: no unexplained regression above 10%.
-- At least 30 minutes of continuous video plus audio per principal mode,
-  including imposed loss/jitter, pause/resume, repeated reconnects, rollover,
-  orientation changes and tray hide/restore; no new audio interruptions.
-- Color test patterns and real image comparisons pass the automated error
-  bound; recording duration, audio/video sync and timestamps remain correct.
+The migration must retain at least 95% of each reference's median new-frame rate,
+with no recurring stall regression; P95/P99 intervals and processing latency must
+not worsen by more than one display period. Investigate CPU/GPU/power or memory
+regressions above 10%, rather than accepting them on average FPS alone. State
+absolute AV offset/drift and test error bounds; do not infer synchronization from
+shared timestamps. Set any device-specific AV tolerance before taking measurements.
 
-Hardware-dependent gates must be recorded as **pending** until measured on real
-Windows/iPhone hardware. CI artifacts are experimental until those gates pass.
+Run continuous playback for at least 30 minutes per principal mode, repeat
+reconnects/orientation/FLUSH, inject loss/jitter, pause/seek HLS, switch and unplug
+speakers/default devices, move between DPI scales, hide/restore the tray and force
+a GPU reset. Window close/minimize must keep receiving; Quit must release sockets,
+workers, CPAL streams and GPU resources. Check Windows autostart and Unicode paths.
+
+These physical gates stay **pending** until measured. CI packages are experimental
+until functionality and both historical performance comparisons pass. Use
+`tools/rust_performance.py` to validate supplied measurement sets; it does not
+create missing measurements or substitute internal submissions for display frames.

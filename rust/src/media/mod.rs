@@ -1,24 +1,31 @@
 pub mod audio;
 pub mod display;
-pub mod recorder;
 pub mod transport;
 pub mod video;
+use crate::playback::MediaTime;
 use ffmpeg_next as ffmpeg;
-use std::time::{Duration, Instant};
+use std::time::Instant;
+
+/// Owned FFmpeg reference; no pixel copy at the final UI handoff.
 pub struct VideoFrame {
     pub frame: ffmpeg::frame::Video,
     pub received: Instant,
-    pub timeline: Duration,
+    pub pts: Option<MediaTime>,
+    pub epoch: u64,
+    pub sequence: u64,
+    pub hls: bool,
 }
 impl VideoFrame {
     pub fn shared(&self) -> anyhow::Result<Self> {
-        // ffmpeg-next's Video::clone() copies all pixels. AVFrame references do not.
         let pointer = unsafe { ffmpeg::ffi::av_frame_clone(self.frame.as_ptr()) };
         anyhow::ensure!(!pointer.is_null(), "Unable to retain video frame");
         Ok(Self {
             frame: unsafe { ffmpeg::frame::Video::wrap(pointer) },
             received: self.received,
-            timeline: self.timeline,
+            pts: self.pts,
+            epoch: self.epoch,
+            sequence: self.sequence,
+            hls: self.hls,
         })
     }
 }

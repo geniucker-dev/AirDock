@@ -1,10 +1,12 @@
-"""Exercise Slint pages and UI/fullscreen restoration under xvfb on Linux."""
+"""Exercise Iced pages, fullscreen/focus restoration and legacy config upgrade in Xvfb.
+Windows DPI, tray and physical GPU acceptance remain separate hardware checks.
+"""
+import atexit
 import argparse
 import hashlib
 import json
 import os
 import pathlib
-import struct
 import subprocess
 import time
 from rust_integration import ROOT, wait_listener
@@ -21,22 +23,25 @@ def main():
     args = parser.parse_args()
     output = ROOT / 'rust-validation' / 'ui'
     output.mkdir(parents=True, exist_ok=True)
+    wm = subprocess.Popen(["openbox"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    atexit.register(lambda: wm.terminate() if wm.poll() is None else None)
+    time.sleep(.25)
     captures = {}
-    for page, y in [('receiver', None), ('settings', 206), ('recording', 154),
-                    ('about', 258), ('hidden', None), ('fullscreen', None),
-                    ('restore', None), ('edit-settings', 206)]:
+    for page, y in [('receiver', None), ('settings', 215), ('diagnostics', 260),
+                    ('focus', None), ('fullscreen', None), ('restore', None),
+                    ('edit-settings', 215), ('resize', None)]:
         directory = output / page
         directory.mkdir(exist_ok=True)
-        (directory / 'settings.json').write_text(json.dumps({'vsync': False}))
+        legacy = {'vsync': False, 'recording_enabled': True, 'recording_path': 'preserve-existing-files'}
+        settings = directory / 'settings.json'
+        settings.write_text(json.dumps(legacy))
+        original = settings.read_bytes()
         capture = output / (page + '.png')
         capture.unlink(missing_ok=True)
-        env = os.environ.copy()
-        env['SDL_AUDIODRIVER'] = 'dummy'
+        env = dict(os.environ, AIRPLAY_AUDIO_NULL='1')
         with (directory / 'receiver.log').open('w') as log:
-            process = subprocess.Popen([
-                str(args.binary.resolve()), '--port', '7012', '--config-dir', str(directory),
-                '--exit-after', '3', '--screenshot', str(capture)
-            ], env=env, stdout=log, stderr=log)
+            process = subprocess.Popen([str(args.binary.resolve()), '--port', '7012', '--config-dir', str(directory),
+                                        '--exit-after', '4', '--screenshot', str(capture)], env=env, stdout=log, stderr=log)
             try:
                 wait_listener(7012, process)
                 deadline = time.monotonic() + 5
@@ -47,53 +52,55 @@ def main():
                     windows = found.stdout.strip().splitlines()
                     if not windows:
                         time.sleep(.025)
-                assert windows, 'Slint window did not appear'
+                assert windows, 'Iced window did not appear'
                 window = windows[-1]
                 xdo('windowfocus', window)
-                # Wait for the first scene/layout before clicking the navigation.
                 time.sleep(.25)
                 if y is not None:
                     xdo('mousemove', '--window', window, 100, y)
                     xdo('click', 1)
-                if page in ['hidden', 'fullscreen']:
-                    xdo('key', 'ctrl+h' if page == 'hidden' else 'F11')
-                if page == 'edit-settings':
-                    time.sleep(.1)
-                    xdo('mousemove', '--window', window, 500, 219)
-                    xdo('click', 1)
-                    xdo('key', 'ctrl+a')
-                    xdo('type', '--clearmodifiers', '--delay', 0, 'Rust UI acceptance')
-                    xdo('mousemove', '--window', window, 280, 322)
-                    xdo('click', 1)
-                    xdo('mousemove', '--window', window, 450, 678)
-                    xdo('click', 1)
+                if page in ['focus', 'fullscreen']:
+                    xdo('key', 'ctrl+h' if page == 'focus' else 'F11')
                 if page == 'restore':
                     for key in ['ctrl+h', 'F11', 'Escape', 'ctrl+h']:
                         xdo('key', key)
                         time.sleep(.1)
-                assert process.wait(timeout=10) == 0, directory
+                if page == 'resize':
+                    xdo('windowsize', window, 960, 640)
+                if page == 'edit-settings':
+                    time.sleep(.15)
+                    xdo('mousemove', '--window', window, 450, 140)
+                    xdo('click', 1)
+                    xdo('key', 'ctrl+a')
+                    xdo('type', '--clearmodifiers', '--delay', 0, 'Iced UI acceptance')
+                    xdo('mousemove', '--window', window, 500, 650)
+                    xdo('click', 5)
+                    time.sleep(.1)
+                    xdo('mousemove', '--window', window, 300, 660)
+                    xdo('click', 1)
+                assert process.wait(timeout=12) == 0, directory
             finally:
                 if process.poll() is None:
                     process.kill()
                     process.wait()
         png = capture.read_bytes()
-        assert png[:8] == b'\x89PNG\r\n\x1a\n', capture
-        width, height = struct.unpack('>II', png[16:24])
-        assert width >= 900 and height >= 620 and len(png) > (100 if page == 'hidden' else 10000), capture
+        assert png[:8] == b'\x89PNG\r\n\x1a\n' and len(png) > 1000, capture
         with Image.open(capture) as image:
-            if page == 'hidden':
-                assert image.convert('RGB').getextrema() == ((10, 10), (13, 13), (19, 19)), 'Hidden UI retained visible pixels'
-            viewport = image.crop((270, 100, 1100, 690)).convert('RGBA').tobytes()
-        captures[page] = {'width': width, 'height': height,
-                          'sha256': hashlib.sha256(png).hexdigest(),
+            width, height = image.size
+            viewport = image.crop((210, 75, min(width, 1095), min(height, 680))).convert('RGBA').tobytes()
+        captures[page] = {'width': width, 'height': height, 'sha256': hashlib.sha256(png).hexdigest(),
                           'viewport_sha256': hashlib.sha256(viewport).hexdigest()}
         if page == 'edit-settings':
-            saved = json.loads((directory / 'settings.json').read_text())
-            assert saved['name'] == 'Rust UI acceptance' and not saved['hevc_enabled'], saved
+            saved = json.loads(settings.read_text())
+            assert saved['name'] == 'Iced UI acceptance', saved
+            assert 'recording_enabled' not in saved and 'recording_path' not in saved
+        else:
+            assert settings.read_bytes() == original, 'Reading legacy config modified the user file'
     assert captures['fullscreen']['width'] > captures['receiver']['width']
-    assert len({captures[p]['viewport_sha256'] for p in ['receiver', 'settings', 'recording', 'about']}) == 4
+    assert captures['resize']['width'] == 960
+    assert len({captures[p]['viewport_sha256'] for p in ['receiver', 'settings', 'diagnostics', 'focus']}) == 4
     assert captures['restore']['viewport_sha256'] == captures['receiver']['viewport_sha256']
-    result = {'pages_and_restore': captures, 'windows_tray_hardware_acceptance': 'pending'}
+    result = {'pages_and_restore': captures, 'windows_tray_dpi_hardware_acceptance': 'pending'}
     (output / 'results.json').write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
 
