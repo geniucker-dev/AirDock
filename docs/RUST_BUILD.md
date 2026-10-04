@@ -70,7 +70,8 @@ inferred from runner/WARP/llvmpipe checks.
 `airplay-windows-rust-distributions-x64-<commit>` containing the Inno Setup
 per-user installer, portable ZIP and SHA-256 checksums. `rust-release.yml`
 verifies and publishes those exact files, rather than repackaging a different
-payload. Dispatch with `publish=false` verifies release assembly without publishing.
+payload. Dispatch the existing `Release` workflow (`release.yml`) on this branch
+with `publish=false` to verify release assembly without publishing.
 Inno Setup 6 is used only for distribution building; its notice is included as
 `INSTALLER_LICENSE.txt`. No Rust/native runtime dependency is added.
 

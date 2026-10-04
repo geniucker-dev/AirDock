@@ -3,10 +3,17 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish an experimental GitHub Release (off verifies assets only)
+        type: boolean
+        default: true
 permissions:
   contents: read
 jobs:
   rust:
     uses: ./.github/workflows/rust-release.yml
+    with:
+      publish: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
     permissions:
       contents: write
