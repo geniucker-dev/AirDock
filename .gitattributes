@@ -1,0 +1,9 @@
+# Protocol tables and codec fixtures must keep exact bytes on Windows too.
+*.bin binary
+*.png binary
+
+# Synthetic codec packet sidecars/playlists have pinned hashes, including newlines.
+rust/tests/fixtures/media/** -text
+
+# Preserve upstream license bytes for the pinned source/hash audit.
+tools/licenses/** -text

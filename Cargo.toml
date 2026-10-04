@@ -1,0 +1,89 @@
+[package]
+name = "airdock"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MPL-2.0"
+description = "Native AirPlay receiver with an Iced/wgpu desktop interface"
+
+[lib]
+path = "rust/src/lib.rs"
+
+[[bin]]
+name = "airdock"
+path = "rust/src/main.rs"
+
+[[example]]
+name = "fairplay_vectors"
+path = "rust/examples/fairplay_vectors.rs"
+
+[[example]]
+name = "media_verify"
+path = "rust/examples/media_verify.rs"
+
+[[example]]
+name = "gpu_verify"
+path = "rust/examples/gpu_verify.rs"
+
+[[example]]
+name = "core_bench"
+path = "rust/examples/core_bench.rs"
+
+[dependencies]
+anyhow = "1"
+tokio = { version = "1", default-features = false, features = ["time"] }
+iced = { version = "=0.14.0", default-features = false, features = ["wgpu", "tiny-skia", "tokio", "image-without-codecs", "advanced", "lazy", "x11", "wayland"] }
+iced_wgpu = "=0.14.0"
+iced_renderer = { version = "=0.14.0", features = ["wgpu", "tiny-skia", "image"] }
+iced_tiny_skia = { version = "=0.14.0", features = ["image"] }
+cpal = "=0.18.2"
+futures = "0.3"
+bytemuck = { version = "1", features = ["derive"] }
+aes = "0.8"
+base64 = "0.22"
+cbc = "0.1"
+clap = { version = "4", features = ["derive"] }
+ctr = "0.9"
+directories = "6"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "software-resampling"] }
+fs2 = "0.4"
+hex = "0.4"
+if-addrs = "0.14"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+libc = "0.2"
+mdns-sd = "0.17"
+plist = "1"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+socket2 = { version = "0.6", features = ["all"] }
+polling = "3"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+url = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+
+[target.'cfg(windows)'.dependencies]
+tray-icon = "0.21"
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_System_Com", "Win32_Storage_FileSystem", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_Console", "Win32_Devices_DeviceAndDriverInstallation", "Win32_NetworkManagement_Dns", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock"] }
+winreg = "0.55"
+
+
+
+
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
