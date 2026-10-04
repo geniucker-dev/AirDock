@@ -124,6 +124,8 @@ jobs:
           Copy-Item -Recurse rust/native/ports dist-rust/sources/native-build
           Copy-Item -Recurse rust/native/triplets dist-rust/sources/native-triplets
           Copy-Item rust/vcpkg.json,rust-toolchain.toml dist-rust/sources/
+          git archive --format=zip --output=dist-rust/sources/airplay-windows-source.zip HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/rust_dependency_licenses.py --output dist-rust/rust-licenses
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Set-Content dist-rust/ACCEPTANCE_STATUS.txt 'Iced/wgpu + cpal migration. See NATIVE_AUDIT.json and docs/RUST_VALIDATION.md. Physical Windows/iPhone playback, power and performance parity remain pending.'

@@ -251,7 +251,7 @@ impl Sink {
     pub fn drain(&mut self, cancel: &AtomicBool) -> Result<()> {
         let (ack, done) = mpsc::channel();
         let mut command = Command::Drain(ack);
-        let start = std::time::Instant::now();
+        let mut last_active = std::time::Instant::now();
         loop {
             if cancel.load(Ordering::Acquire)
                 || self.epoch != self.generation.load(Ordering::Acquire)
@@ -275,8 +275,11 @@ impl Sink {
                 Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
+            if self.clock.paused.load(Ordering::Acquire) {
+                last_active = std::time::Instant::now();
+            }
             anyhow::ensure!(
-                start.elapsed() < Duration::from_secs(10),
+                last_active.elapsed() < Duration::from_secs(10),
                 "Audio drain timed out"
             );
         }
@@ -413,6 +416,10 @@ impl Output {
         epoch: u64,
         gain: f32,
     ) -> Result<()> {
+        anyhow::ensure!(
+            pcm.len().is_multiple_of(channels as usize),
+            "PCM is not aligned to complete channel frames"
+        );
         use ffmpeg_next::{
             ChannelLayout,
             format::{Sample, sample::Type},
@@ -586,6 +593,9 @@ struct Callback {
 }
 impl Callback {
     fn fill<T: cpal::SizedSample>(&mut self, data: &mut [T], latency: u64) {
+        self.clock
+            .output_latency_us
+            .store(latency, Ordering::Relaxed);
         let generation = self.epoch.load(Ordering::Acquire);
         let mut first = None;
         let mut horizon = None;

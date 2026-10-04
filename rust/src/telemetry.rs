@@ -1,10 +1,15 @@
 use std::{
     collections::VecDeque,
-    sync::{Mutex, atomic::AtomicU64},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicI64, AtomicU64},
+    },
 };
 #[derive(Default)]
 pub struct Metrics {
     pub decoded: AtomicU64,
+    pub estimated_av_offset_us: AtomicI64,
+    pub estimated_av_available: AtomicBool,
     pub presented: AtomicU64,
     pub last_submitted_sequence: AtomicU64,
     pub last_submission_epoch: AtomicU64,

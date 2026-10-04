@@ -502,7 +502,10 @@ fn run_audio(
                 }
             }
             if last_active > 0 && now.saturating_sub(last_active) >= 500 {
-                state.ui.lock().unwrap().paused = true;
+                let mut ui = state.ui.lock().unwrap();
+                if !ui.paused {
+                    ui.paused = true;
+                }
             }
             let wait = if recovery.missing().is_some() {
                 10

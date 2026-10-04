@@ -51,6 +51,9 @@ impl Shared {
         let _ = samples;
     }
     pub fn reset_media(&self) -> u64 {
+        self.metrics
+            .estimated_av_available
+            .store(false, Ordering::Release);
         let epoch = self.advance();
         self.media.reset();
         epoch
@@ -97,6 +100,8 @@ impl Shared {
             "p95_new_submission_interval_us":intervals.get((intervals.len()*95).div_ceil(100).saturating_sub(1)).copied(),
             "p99_new_submission_interval_us":intervals.get((intervals.len()*99).div_ceil(100).saturating_sub(1)).copied(),
             "submission_interval_sample_count":intervals.len(),
+            "estimated_av_offset_us":m.estimated_av_available.load(Ordering::Acquire).then(||m.estimated_av_offset_us.load(Ordering::Relaxed)),
+            "av_measurement":"Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
             "presentation_measurement":"GPU render submission, not physical display time",
             "uploaded_frames":m.uploaded.load(Ordering::Relaxed),
             "pending_scheduled_frames":self.media.pending_frames(),

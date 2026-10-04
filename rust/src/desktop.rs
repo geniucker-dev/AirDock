@@ -68,6 +68,12 @@ pub fn run() -> Result<()> {
         println!("{}", crate::render::native_report()?);
         return Ok(());
     }
+    // Set once, before any threads exist; runtime selection does not mutate the process environment.
+    if args.audio_null {
+        unsafe {
+            std::env::set_var("AIRPLAY_AUDIO_NULL", "1");
+        }
+    }
     ffmpeg_next::init()?;
     if let Some(path) = &args.log {
         let file = OpenOptions::new().create(true).append(true).open(path)?;
@@ -125,12 +131,6 @@ pub fn run() -> Result<()> {
         },
         Ordering::Relaxed,
     );
-    // Set once, before any threads exist; runtime selection does not mutate the process environment.
-    if args.audio_null {
-        unsafe {
-            std::env::set_var("AIRPLAY_AUDIO_NULL", "1");
-        }
-    }
     crate::platform::install_exit_handlers()?;
     let mut runtime = Runtime::start(directory.clone(), args.port, settings.clone())?;
     tracing::info!(
@@ -831,6 +831,7 @@ impl App {
             );
         }
         if self.focus
+            && self.status.error.is_empty()
             && self.page == 0
             && matches!(render::compositor::STATUS.load(Ordering::Acquire), 1 | 2)
         {

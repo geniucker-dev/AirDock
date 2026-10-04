@@ -290,6 +290,9 @@ impl Playback {
         self.sequence.fetch_add(1, Ordering::Relaxed) + 1
     }
     pub fn submit(&self, mut frame: VideoFrame) {
+        if self.stop.load(Ordering::Acquire) {
+            return;
+        }
         if frame.epoch != self.epoch.load(Ordering::Acquire) {
             self.metrics.stale_dropped.fetch_add(1, Ordering::Relaxed);
             return;
@@ -318,7 +321,11 @@ impl Playback {
         }
     }
     pub fn pending_frames(&self) -> usize {
-        self.pending.load(Ordering::Acquire)
+        if self.stop.load(Ordering::Acquire) {
+            0
+        } else {
+            self.pending.load(Ordering::Acquire)
+        }
     }
     pub fn drain(&self, epoch: u64, cancel: &AtomicBool) {
         while self.pending_frames() != 0

@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import sys
+from rust_native_source import expected_versions
 
 LIBRARIES = {'avcodec': 62, 'avformat': 62, 'avutil': 60, 'swresample': 6}
 REQUIRED = {'--disable-encoders', '--disable-muxers', '--disable-nvenc', '--enable-shared',
@@ -21,6 +22,8 @@ def audit(root):
     root = root.resolve()
     directory = root / 'bin'
     dll_directory = os.add_dll_directory(str(directory))
+    archive = root / 'share' / 'ffmpeg' / 'ffmpeg-source.zip'
+    source_versions = expected_versions(archive)
     rows = {}
     libraries = {}
     for name, major in LIBRARIES.items():
@@ -36,6 +39,7 @@ def audit(root):
         license_text = license_api().decode()
         flags = config_api().decode().split()
         assert version() >> 16 == major
+        assert version() == source_versions[name], (name, version(), source_versions[name])
         assert license_text.startswith('LGPL'), license_text
         assert REQUIRED <= set(flags), (name, REQUIRED - set(flags))
         assert not FORBIDDEN.intersection(flags), (name, flags)

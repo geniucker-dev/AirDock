@@ -692,8 +692,8 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
         ui.kind = "HLS playback".into();
         ui.decoder = "CPU".into();
     }
-    let (vtx, vrx) = mpsc::sync_channel::<(u64, Option<ffmpeg::Packet>)>(32);
-    let (atx, arx) = mpsc::sync_channel::<(u64, Option<ffmpeg::Packet>)>(128);
+    let (vtx, vrx) = mpsc::sync_channel::<(u64, Option<ffmpeg::Packet>, Instant)>(32);
+    let (atx, arx) = mpsc::sync_channel::<(u64, Option<ffmpeg::Packet>, Instant)>(128);
     let local_stop = Arc::new(AtomicBool::new(false));
     let shared = inner.shared.clone();
     let audio_stop = local_stop.clone();
@@ -713,7 +713,7 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
             let mut epoch = shared.generation();
             let mut pcm_next = None;
             while !audio_stop.load(Ordering::Acquire) && !global_stop.load(Ordering::Acquire) {
-                let (generation, packet) = match arx.recv_timeout(Duration::from_millis(100)) {
+                let (generation, packet, _) = match arx.recv_timeout(Duration::from_millis(100)) {
                     Ok(p) => p,
                     Err(mpsc::RecvTimeoutError::Timeout) => continue,
                     Err(_) => break,
@@ -838,7 +838,7 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
                     None
                 };
                 if let Some(target) = target {
-                    let mut item = (epoch, if eof { None } else { Some(packet) });
+                    let mut item = (epoch, if eof { None } else { Some(packet) }, Instant::now());
                     loop {
                         match target.try_send(item) {
                             Ok(()) => break,
@@ -859,7 +859,7 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
                     }
                 }
                 if eof {
-                    let mut item = (epoch, None);
+                    let mut item = (epoch, None, Instant::now());
                     loop {
                         match atx.try_send(item) {
                             Ok(()) | Err(TrySendError::Disconnected(_)) => break,
@@ -881,8 +881,10 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
         })?;
     let result = (|| -> Result<()> {
         let mut epoch = inner.shared.generation();
+        let mut receipts = HashMap::<i64, Instant>::new();
         while !stop.load(Ordering::Acquire) && !inner.stop.load(Ordering::Acquire) {
-            let (generation, packet) = match vrx.recv_timeout(Duration::from_millis(100)) {
+            let (generation, packet, received) = match vrx.recv_timeout(Duration::from_millis(100))
+            {
                 Ok(p) => p,
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(_) => break,
@@ -893,8 +895,15 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
             if generation != epoch {
                 epoch = generation;
                 video.flush();
+                receipts.clear();
             }
             if let Some(packet) = packet {
+                if receipts.len() >= 64 {
+                    receipts.clear();
+                }
+                if let Some(pts) = packet.pts() {
+                    receipts.insert(pts, received);
+                }
                 video.send_packet(&packet)?
             } else {
                 video.send_eof()?
@@ -937,9 +946,13 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
                             ffmpeg::ffi::AVColorRange::AVCOL_RANGE_MPEG;
                     }
                 }
+                let received = frame
+                    .timestamp()
+                    .and_then(|pts| receipts.remove(&pts))
+                    .unwrap_or(received);
                 inner.shared.publish(VideoFrame {
                     frame,
-                    received: Instant::now(),
+                    received,
                     pts,
                     epoch,
                     sequence: 0,

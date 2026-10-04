@@ -4,6 +4,19 @@ The receiver is owned by `runtime::Runtime`, outside the Iced daemon. Closing a
 presentation window does not stop the listener. Only explicit Quit / runtime
 cancellation shuts down discovery, sessions, audio actors and media scheduling.
 
+## C++ comparison baseline 562120e4
+
+```text
+mDNS / RTSP sessions -> FFmpeg decoder -> SDL video renderer
+                   |-> RTP audio decoder -> SDL output
+                   `-> recording workers -> MP4
+ImGui controls / settings / tray -> SDL window and application loop
+```
+
+This source remains in Git and the independent C++ checkout. The migration
+compares against its actual release playback performance, not just the former
+Rust CPU conversion path.
+
 ## Before (Rust / Slint baseline 43bcb0c)
 
 ```text
@@ -50,9 +63,11 @@ missing, not a timestamp at the start of the application.
 HLS has bounded independent compressed video/audio queues and separate demux,
 audio decode and video scheduling. The demuxer never sleeps until a video's
 presentation deadline. When available, estimated audible PCM position is the
-video master; otherwise playback uses a monotonic PTS anchor. The display slot
+video master; otherwise playback uses a monotonic PTS anchor that stops during HLS pause. The display slot
 contains only the newest frame released by scheduling; future frames remain in
-a bounded scheduling queue. The mirrored audio producer uses a slow occupancy
+a bounded scheduling queue. Already-due frames are coalesced to the newest due
+frame; future frames are not presented early. Mirroring does not build a large
+queue to chase a source clock more than 100 ms ahead. The mirrored audio producer uses a slow occupancy
 servo limited to 300 ppm, outside the real-time callback. HLS does not adjust
 rate based on how quickly its network source downloads. The clock clamps to
 the last submitted PCM horizon during underflow. Natural HLS EOF drains both

@@ -16,6 +16,9 @@ A separate source relationship review is required before any license change.
 - **vcpkg FFmpeg build port**: Microsoft/vcpkg, MIT; copied from the pinned
   manifest baseline and modified to disable encoding and archive patched source.
   Its license accompanies the overlay. https://github.com/microsoft/vcpkg
+- **Microsoft Visual C++ runtime**: Microsoft redistributable runtime DLLs are
+  bundled when imported by the executable/native DLLs. Windows OS libraries and
+  graphics drivers are system prerequisites and are not redistributed.
 - **Rust dependencies**: Cargo.lock pins versions. Distribution artifacts include
   source license texts and SPDX/repository metadata in rust-licenses/index.json.
 - **Rust PlayFair implementation/data**: existing port derived from nored/airfry;

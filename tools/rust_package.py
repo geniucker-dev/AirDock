@@ -4,6 +4,7 @@ Requires pefile. Source/build material is mandatory for Windows distributions.
 The system fixture generator is deliberately outside the distribution.
 """
 import argparse,ctypes,hashlib,json,os,pathlib,re,shutil,subprocess,sys
+from rust_native_source import expected_versions
 FORBIDDEN=re.compile(r'(sdl|slint|x264|x265|nvenc|fdk[-_]?aac|avdevice|avfilter|postproc)',re.I)
 LIBRARIES={'avcodec':62,'avformat':62,'avutil':60,'swresample':6}
 def imports(path):
@@ -43,6 +44,7 @@ def audit(directory):
     report=json.loads(subprocess.check_output([str(directory/'airplay-windows.exe'),'--native-report'],cwd=directory,text=True))
     kernel=ctypes.WinDLL('kernel32',use_last_error=True)
     kernel.GetModuleFileNameW.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p,ctypes.c_uint32]
+    source_versions=expected_versions(directory/'sources/ffmpeg-source.zip')
     rows={}
     for library,major in LIBRARIES.items():
         candidates=list(directory.glob(library+'-*.dll'));assert len(candidates)==1,(library,candidates)
@@ -51,6 +53,7 @@ def audit(directory):
         assert kernel.GetModuleFileNameW(dll._handle,loaded,len(loaded)),ctypes.WinError(ctypes.get_last_error())
         assert pathlib.Path(loaded.value).resolve()==path.resolve(),f'Wrong loaded DLL: {loaded.value}'
         entry=report[library];assert entry['version']>>16==major,(library,entry['version'])
+        assert entry['version']==source_versions[library],(library,entry['version'],source_versions[library])
         assert entry['license'].startswith('LGPL'),(library,entry['license'])
         flags=entry['configuration'].split()
         assert not any(flag in ['--enable-gpl','--enable-nonfree','--enable-libx264','--enable-libx265','--enable-libfdk-aac','--enable-nvenc'] for flag in flags),entry
@@ -65,6 +68,8 @@ def audit(directory):
         for name in imports(path):
             assert not FORBIDDEN.search(name),name
             assert (directory/name).exists() or name.lower().startswith(('api-ms-win-','ext-ms-win-')) or (pathlib.Path(os.environ['SystemRoot'])/'System32'/name).exists(),name
+    assert (directory/'sources/airplay-windows-source.zip').exists(),'Exact application corresponding source archive missing'
+    assert (directory/'sources/native-triplets/x64-windows.cmake').exists(),'Native build triplet missing'
     assert (directory/'sources/ffmpeg-source.zip').exists(),'Corresponding patched FFmpeg source archive missing'
     assert (directory/'sources/native-build/ffmpeg/portfile.cmake').exists(),'Native build materials missing'
     result={'dlls':rows,'runtime':report,'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in directory.iterdir() if p.suffix in ['.dll','.exe']},'physical_windows_iphone_acceptance':'pending'}

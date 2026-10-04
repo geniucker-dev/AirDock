@@ -55,8 +55,13 @@ impl Runtime {
                         Ok(Command::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         Ok(Command::Settings(settings)) => {
                             let result = (|| -> Result<()> {
-                                settings.save(&directory.join("settings.json"))?;
+                                let previous_autostart = state.settings.read().unwrap().autostart;
                                 platform::autostart(settings.autostart)?;
+                                if let Err(error) = settings.save(&directory.join("settings.json"))
+                                {
+                                    let _ = platform::autostart(previous_autostart);
+                                    return Err(error);
+                                }
                                 *state.settings.write().unwrap() = settings;
                                 drop(discovery.take());
                                 discovery = Some(Discovery::start(server.device())?);
@@ -77,8 +82,13 @@ impl Runtime {
                             .collect::<Vec<_>>()
                             .join(" · ");
                         let mut status = state.ui.lock().unwrap();
-                        status.usb = platform::usb_present();
-                        status.addresses = addresses;
+                        let usb = platform::usb_present();
+                        if status.usb != usb {
+                            status.usb = usb;
+                        }
+                        if status.addresses != addresses {
+                            status.addresses = addresses;
+                        }
                         last_devices = std::time::Instant::now();
                     }
                 }

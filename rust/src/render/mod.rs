@@ -15,6 +15,7 @@ use iced_wgpu::{
 use std::{
     fmt,
     sync::{Arc, atomic::Ordering},
+    time::Instant,
 };
 #[derive(Clone)]
 pub struct Video {
@@ -54,6 +55,13 @@ pub struct Uniforms {
     pub options: [f32; 4],
     pub crop: [f32; 4],
 }
+#[derive(Clone, Copy)]
+struct PreparedFrame {
+    epoch: u64,
+    sequence: u64,
+    received: Instant,
+    pts: Option<crate::playback::MediaTime>,
+}
 pub struct VideoPipeline {
     pub pipeline: wgpu::RenderPipeline,
     pub layout: wgpu::BindGroupLayout,
@@ -64,6 +72,7 @@ pub struct VideoPipeline {
     format: wgpu::TextureFormat,
     key: Option<(u32, u32, Layout)>,
     last: Option<(u64, u64)>,
+    prepared: Option<PreparedFrame>,
     rejected: Option<(u64, u64)>,
     area: [f32; 4],
     scratch: [Vec<u8>; 3],
@@ -161,6 +170,7 @@ impl Pipeline for VideoPipeline {
             format,
             key: None,
             last: None,
+            prepared: None,
             rejected: None,
             area: [0.; 4],
             scratch: Default::default(),
@@ -321,7 +331,9 @@ impl Primitive for VideoPrimitive {
             p.valid = false;
             return;
         }
-        let latest = self
+        // Select again immediately before upload: UI updates may lag the mailbox.
+        // Drawing a superseded UI snapshot must not produce a black video pass.
+        let frame = self
             .shared
             .media
             .display
@@ -329,15 +341,14 @@ impl Primitive for VideoPrimitive {
             .lock()
             .unwrap()
             .as_ref()
-            .map(|f| f.sequence);
-        if latest.is_some_and(|seq| seq > self.frame.sequence) {
+            .filter(|f| f.epoch == self.shared.generation())
+            .cloned();
+        let Some(frame) = frame else {
+            p.valid = false;
             return;
-        }
+        };
         let scale = viewport.scale_factor();
-        let (w, h) = (
-            self.frame.frame.width() as f32,
-            self.frame.frame.height() as f32,
-        );
+        let (w, h) = (frame.frame.width() as f32, frame.frame.height() as f32);
         let contain = (bounds.width / w).min(bounds.height / h);
         let fill = (bounds.width / w).max(bounds.height / h);
         let (area, crop) = if self.crop {
@@ -359,22 +370,28 @@ impl Primitive for VideoPrimitive {
             )
         };
         p.area = area.map(|v| v * scale);
-        let key = (self.frame.epoch, self.frame.sequence);
+        let key = (frame.epoch, frame.sequence);
         if p.rejected == Some(key) {
             p.valid = false;
             return;
         }
         if p.last != Some(key) {
-            match p.upload(device, queue, &self.frame.frame, crop) {
+            match p.upload(device, queue, &frame.frame, crop) {
                 Ok(()) => {
                     p.last = Some(key);
                     p.rejected = None;
+                    p.prepared = Some(PreparedFrame {
+                        epoch: frame.epoch,
+                        sequence: frame.sequence,
+                        received: frame.received,
+                        pts: frame.pts,
+                    });
                     self.shared.metrics.uploaded.fetch_add(1, Ordering::Relaxed);
                     self.shared
                         .media
                         .display
                         .consumed
-                        .store(self.frame.sequence, Ordering::Release);
+                        .store(frame.sequence, Ordering::Release);
                 }
                 Err(e) => {
                     p.valid = false;
@@ -395,9 +412,13 @@ impl Primitive for VideoPrimitive {
         }
     }
     fn draw(&self, p: &VideoPipeline, pass: &mut wgpu::RenderPass<'_>) -> bool {
+        let Some(frame) = p.prepared else {
+            return true;
+        };
         if !p.valid
-            || p.last != Some((self.frame.epoch, self.frame.sequence))
-            || self.frame.epoch != self.shared.generation()
+            || p.last != Some((frame.epoch, frame.sequence))
+            || frame.epoch != self.shared.generation()
+            || !self.shared.media.display.visible.load(Ordering::Acquire)
         {
             return true;
         }
@@ -418,14 +439,26 @@ impl Primitive for VideoPrimitive {
                 .shared
                 .metrics
                 .last_submitted_sequence
-                .swap(self.frame.sequence, Ordering::Relaxed)
-                != self.frame.sequence
+                .swap(frame.sequence, Ordering::Relaxed)
+                != frame.sequence
             {
                 self.shared
                     .metrics
                     .presented
                     .fetch_add(1, Ordering::Relaxed);
-                let latency = self.frame.received.elapsed().as_micros() as u64;
+                if let Some(pts) = frame.pts
+                    && let Some(audio) = self.shared.media.audio_clock.position(frame.epoch)
+                {
+                    self.shared
+                        .metrics
+                        .estimated_av_offset_us
+                        .store(pts.micros().saturating_sub(audio), Ordering::Relaxed);
+                    self.shared
+                        .metrics
+                        .estimated_av_available
+                        .store(true, Ordering::Release);
+                }
+                let latency = frame.received.elapsed().as_micros() as u64;
                 self.shared
                     .metrics
                     .latency_us
@@ -445,8 +478,8 @@ impl Primitive for VideoPrimitive {
                     .shared
                     .metrics
                     .last_submission_epoch
-                    .swap(self.frame.epoch, Ordering::Relaxed);
-                if previous != 0 && previous_epoch == self.frame.epoch {
+                    .swap(frame.epoch, Ordering::Relaxed);
+                if previous != 0 && previous_epoch == frame.epoch {
                     let mut intervals = self.shared.metrics.present_intervals_us.lock().unwrap();
                     if intervals.len() == 4096 {
                         intervals.pop_front();

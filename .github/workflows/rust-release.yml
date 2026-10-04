@@ -8,7 +8,7 @@ permissions:
   contents: read
 jobs:
   build:
-    uses: ./.github/workflows/rust-windows-build.yml
+    uses: ./.github/workflows/rust-ci.yml
   publish:
     needs: build
     runs-on: ubuntu-latest
