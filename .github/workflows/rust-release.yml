@@ -3,7 +3,16 @@ on:
   push:
     tags: ['rust-v*']
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish an experimental GitHub Release (off verifies assets only)
+        type: boolean
+        default: true
   workflow_call:
+    inputs:
+      publish:
+        type: boolean
+        default: true
 permissions:
   contents: read
 jobs:
@@ -18,25 +27,34 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: airplay-windows-rust-x64-${{ github.sha }}
-          path: dist-rust
-      - name: Package experimental build
+          name: airplay-windows-rust-distributions-x64-${{ github.sha }}
+          path: dist-release
+      - name: Verify the exact installer and archive accepted by CI
+        run: python tools/rust_distributions.py --output dist-release --verify-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: airplay-windows-rust-release-assets-${{ github.sha }}
+          path: dist-release/
+          if-no-files-found: error
+      - name: Select experimental release tag
         shell: bash
+        env:
+          RELEASE_TRIGGER: ${{ github.event_name }}
+          RELEASE_REF: ${{ github.ref_name }}
         run: |
-          if [ '${{ github.event_name }}' = workflow_dispatch ]; then
+          if [ "$RELEASE_TRIGGER" = workflow_dispatch ]; then
             tag="rust-dev-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}"
           else
-            tag="${GITHUB_REF_NAME}"
+            tag="$RELEASE_REF"
           fi
           echo "RUST_RELEASE_TAG=$tag" >> "$GITHUB_ENV"
-          cd dist-rust
-          zip -r "../airplay-windows-$tag-x64.zip" .
       - uses: softprops/action-gh-release@v2
+        if: github.event_name != 'workflow_dispatch' || inputs.publish
         with:
           tag_name: ${{ env.RUST_RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
           name: Rust experimental ${{ env.RUST_RELEASE_TAG }}
-          files: airplay-windows-${{ env.RUST_RELEASE_TAG }}-x64.zip
+          files: dist-release/*
           prerelease: true
           generate_release_notes: true
-          body: 'Iced/wgpu + cpal experimental build. Automated protocol/media checks are required before packaging. Windows/iPhone feature and performance acceptance remains subject to docs/RUST_ACCEPTANCE.md; this build does not replace the C++ stable release.'
+          body: 'Iced/wgpu + cpal experimental build. Includes a verified user-level Windows installer, portable ZIP and SHA-256 checksums, built from the same audited LGPL playback DLL payload. Installation/upgrade/uninstall and packaged playback gates passed. Physical Windows/iPhone feature and performance acceptance remains subject to docs/RUST_ACCEPTANCE.md.'

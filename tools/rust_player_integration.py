@@ -80,7 +80,7 @@ def main():
                     assert visible_window() is None, 'Audio-only session revealed the player'
                 media.send_mirror(connection, key, paths[1:2])  # Portrait, intentional black side bars.
                 window = wait_window()
-                time.sleep(.35)
+                time.sleep(3.3 if case != 'hidden-reconnect' else .35) # Fullscreen mouse controls auto-hide.
                 if case != 'hidden-reconnect':
                     capture = ImageGrab.grab(xdisplay='').convert('RGB')
                     capture.save(directory/'video-fullscreen.png')

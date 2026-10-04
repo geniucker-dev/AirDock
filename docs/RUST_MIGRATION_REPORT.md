@@ -11,6 +11,8 @@ Old/new character diagrams and ownership are in [architecture](RUST_ARCHITECTURE
   Iced's current render pass. Stale frames are replaced immediately before upload.
 - Added receiver/settings/diagnostics pages, fullscreen/focus, Windows tray
   restoration, startup/device/GPU options, cover art and compatible configuration.
+- Added validated settings drafts/save feedback, independently saved audio output
+  and geometry, close-to-tray policy and automatically hidden mouse playback controls.
 - Split runtime, sessions, status, settings, platform services, audio and playback.
   Window close does not stop receiving; Quit cancels and joins workers.
 - Replaced SDL audio with cpal/WASAPI and a preallocated, generation-tagged SPSC
@@ -55,7 +57,11 @@ Download `airplay-windows-rust-x64-<commit>` from the final successful CI run.
 It includes the executable, exact runtime DLL closure, `NATIVE_AUDIT.json`, Rust
 notices, patched FFmpeg source/build materials, exact application source and docs.
 Validation reports are separate Windows/Linux artifacts. CI artifact retention is
-14 days; the experimental release workflow produces a release ZIP when invoked.
+14 days. The additional `airplay-windows-rust-distributions-x64-<commit>`
+artifact contains an unsigned per-user installer, portable ZIP and checksums.
+The experimental release workflow publishes these exact files when invoked.
+Installer CI verifies install/upgrade, obsolete payload removal, installed playback,
+uninstall and preservation of configuration/identity/untracked user files.
 
 No Windows/iPhone pair, physical speaker or hardware GPU is attached here.
 Real mirroring/HLS interoperability, WASAPI default-device switching/hotplug,

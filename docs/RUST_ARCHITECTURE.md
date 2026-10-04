@@ -127,6 +127,18 @@ are coalesced; the daemon's low-frequency housekeeping is not an animation loop.
 Fullscreen removes navigation, title and control rows and uses the same video
 Primitive over the entire surface. Errors appear as an overlay. Exiting returns
 to the page from which fullscreen was entered; aspect ratio/crop remain explicit.
+Mouse movement reveals a bounded floating playback bar, with mute, volume, fit/crop
+and exit. Existing low-frequency housekeeping hides it after inactivity; no new
+animation timer is added.
+
+The desktop form holds saved settings, a separate draft and validation/save state.
+Runtime serializes three typed operations: form commit, immediate audio output,
+and window preferences. Each merges unrelated values from the latest saved state,
+persists before applying, and replies with success/error. Unsaved form edits cannot
+be committed by resizing or selecting an audio device. Geometry changes are
+debounced; exit flushes pending preferences. Close-to-tray policy is distinct
+from minimize-to-tray; disabling close-to-tray minimizes to the taskbar while
+receiving continues.
 
 ## Scope and licensing
 

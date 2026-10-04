@@ -63,6 +63,7 @@ jobs:
           xvfb-run -a python tools/rust_activity_integration.py --binary target/debug/airplay-windows
           xvfb-run -a python tools/rust_ui_smoke.py --binary target/debug/airplay-windows
           xvfb-run -a python tools/rust_player_integration.py --binary target/debug/airplay-windows
+          xvfb-run -a python tools/rust_preferences_ui.py --binary target/debug/airplay-windows
           xvfb-run -a python tools/rust_integration.py --gui --binary target/debug/airplay-windows
           xvfb-run -a python tools/rust_integration.py --hdr --gui --binary target/debug/airplay-windows
           xvfb-run -a python tools/rust_hls_integration.py --fmp4 --hdr pq --gui --binary target/debug/airplay-windows

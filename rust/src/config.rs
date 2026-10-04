@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub schema_version: u32,
@@ -25,6 +25,30 @@ pub struct Settings {
     pub window_width: u32,
     pub window_height: u32,
     pub hls_enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowPreferences {
+    pub width: u32,
+    pub height: u32,
+    pub fullscreen: bool,
+    pub hide_ui: bool,
+}
+impl WindowPreferences {
+    pub fn from_settings(s: &Settings) -> Self {
+        Self {
+            width: s.window_width,
+            height: s.window_height,
+            fullscreen: s.fullscreen,
+            hide_ui: s.hide_ui,
+        }
+    }
+    pub fn apply(&self, s: &mut Settings) {
+        s.window_width = self.width;
+        s.window_height = self.height;
+        s.fullscreen = self.fullscreen;
+        s.hide_ui = self.hide_ui;
+    }
 }
 
 impl Default for Settings {

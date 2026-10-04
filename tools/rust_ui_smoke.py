@@ -42,7 +42,7 @@ def main():
         env = dict(os.environ, AIRPLAY_AUDIO_NULL='1')
         with (directory / 'receiver.log').open('w') as log:
             process = subprocess.Popen([str(args.binary.resolve()), '--port', '7012', '--config-dir', str(directory),
-                                        '--exit-after', '4', '--screenshot', str(capture)], env=env, stdout=log, stderr=log)
+                                        '--exit-after', '6', '--screenshot', str(capture)], env=env, stdout=log, stderr=log)
             try:
                 wait_listener(7012, process)
                 deadline = time.monotonic() + 5
@@ -75,14 +75,11 @@ def main():
                     xdo('windowsize', window, 960, 640)
                 if page == 'edit-settings':
                     time.sleep(.15)
-                    xdo('mousemove', '--window', window, 450, 140)
+                    xdo('mousemove', '--window', window, 450, 205)
                     xdo('click', 1)
                     xdo('key', 'ctrl+a')
                     xdo('type', '--clearmodifiers', '--delay', 0, 'Iced UI acceptance')
-                    xdo('mousemove', '--window', window, 500, 650)
-                    xdo('click', 5)
-                    time.sleep(.1)
-                    xdo('mousemove', '--window', window, 300, 660)
+                    xdo('mousemove', '--window', window, 260, 717)
                     xdo('click', 1)
                 assert process.wait(timeout=12) == 0, directory
             finally:
@@ -105,8 +102,13 @@ def main():
             saved = json.loads(settings.read_text())
             assert saved['name'] == 'Iced UI acceptance', saved
             assert 'recording_enabled' not in saved and 'recording_path' not in saved
-        else:
+        elif page in ['receiver','settings','diagnostics']:
             assert settings.read_bytes() == original, 'Reading legacy config modified the user file'
+        else:
+            saved=json.loads(settings.read_text())
+            assert saved['name']=='AirPlay-Windows' and saved['vsync'] is False
+            if page=='resize': assert (saved['window_width'],saved['window_height'])==(960,640),saved
+            if page.startswith('fullscreen'): assert saved['fullscreen'] is True,saved
     assert captures['fullscreen']['width'] > captures['receiver']['width']
     assert captures['fullscreen-settings']['width'] == captures['fullscreen']['width']
     assert captures['resize']['width'] == 960

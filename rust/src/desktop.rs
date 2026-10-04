@@ -1,6 +1,6 @@
 //! Desktop presentation only. Receiver lifetime is owned by Runtime, outside Iced.
 use crate::{
-    config::{self, Settings},
+    config::{self, Settings, WindowPreferences},
     media::VideoFrame,
     render::{self, compositor::Renderer},
     runtime::{self, Client, Runtime},
@@ -23,8 +23,11 @@ use std::{
     hash::{Hash, Hasher},
     path::PathBuf,
     sync::{Arc, Mutex, atomic::Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
+mod form;
+use form::Form;
+
 #[derive(Parser, Clone, Debug)]
 #[command(version, about = "AirPlay receiver — Iced + wgpu / cpal")]
 struct Arguments {
@@ -194,6 +197,14 @@ enum Message {
     Opened,
     Window(window::Id, window::Event),
     Minimized(window::Id, bool),
+    CheckedSize(window::Id, iced::Size, window::Mode, u64),
+    SettingsSaved(Result<Settings, String>),
+    AudioSaved(Result<Settings, String>),
+    PreferencesSaved(WindowPreferences, Result<Settings, String>),
+    Pointer,
+    ControlsHovered(bool),
+    Mute,
+    LeavePresentation,
     Page(u8),
     Fullscreen,
     Crop,
@@ -216,6 +227,7 @@ enum Message {
     Vsync(bool),
     Hls(bool),
     MinimizeTray(bool),
+    CloseTray(bool),
     Autostart(bool),
     StartHidden(bool),
     Volume(f32),
@@ -306,7 +318,16 @@ impl ConnectionReveal {
 }
 struct App {
     client: Client,
-    settings: Settings,
+    form: Form,
+    preferences: WindowPreferences,
+    preferences_dirty: Option<Instant>,
+    preferences_pending: bool,
+    quit_requested: bool,
+    window_mode_revision: u64,
+    controls_visible: bool,
+    controls_hovered: bool,
+    controls_used: Instant,
+    last_audible_db: f32,
     directory: PathBuf,
     args: Arguments,
     status: UiState,
@@ -314,17 +335,17 @@ struct App {
     events: FrameEvents,
     status_events: FrameEvents,
     window: Option<window::Id>,
+    viewport: iced::Size,
     page: u8,
     fullscreen: bool,
     fullscreen_return_page: Option<u8>,
     crop: bool,
     focus: bool,
     minimized: bool,
+    close_minimized: bool,
     connection_reveal: ConnectionReveal,
     gpu_warning: bool,
-    width: String,
-    height: String,
-    fps: String,
+
     devices: Vec<crate::audio::DeviceChoice>,
     cover: Option<widget::image::Handle>,
     cover_source: Arc<Vec<u8>>,
@@ -361,17 +382,26 @@ impl App {
             status: UiState::default(),
             frame: None,
             window: None,
+            viewport: iced::Size::new(settings.window_width as f32, settings.window_height as f32),
             page: 0,
             fullscreen: settings.fullscreen,
             fullscreen_return_page: None,
             crop: false,
             focus: settings.hide_ui,
             minimized: false,
+            close_minimized: false,
             connection_reveal: ConnectionReveal::default(),
             gpu_warning: false,
-            width: settings.mirror_width.to_string(),
-            height: settings.mirror_height.to_string(),
-            fps: settings.max_fps.to_string(),
+            form: Form::new(settings.clone()),
+            preferences: WindowPreferences::from_settings(&settings),
+            preferences_dirty: None,
+            preferences_pending: false,
+            quit_requested: false,
+            window_mode_revision: 0,
+            controls_visible: false,
+            controls_hovered: false,
+            controls_used: Instant::now(),
+            last_audible_db: 0.,
             devices: vec![crate::audio::DeviceChoice::default_output()],
             cover: None,
             cover_source: Arc::new(Vec::new()),
@@ -382,7 +412,6 @@ impl App {
             tray,
             #[cfg(windows)]
             tray_events,
-            settings,
             directory,
             args,
         };
@@ -404,6 +433,7 @@ impl App {
         }
     }
     fn open_window(&mut self) -> Task<Message> {
+        self.close_minimized = false;
         if let Some(id) = self.window {
             self.minimized = false;
             self.client
@@ -423,8 +453,8 @@ impl App {
         }
         let (id, task) = window::open(window::Settings {
             size: iced::Size::new(
-                self.settings.window_width as f32,
-                self.settings.window_height as f32,
+                self.preferences.width as f32,
+                self.preferences.height as f32,
             ),
             min_size: Some(iced::Size::new(760., 520.)),
             exit_on_close_request: false,
@@ -490,6 +520,9 @@ impl App {
     fn refresh(&mut self) {
         let paused = self.status.paused;
         self.status = self.client.shared.ui.lock().unwrap().clone();
+        if self.status.volume_db > -100. {
+            self.last_audible_db = self.status.volume_db;
+        }
         if paused != self.status.paused {
             self.client
                 .shared
@@ -543,7 +576,59 @@ impl App {
         }
         None
     }
+    fn save_preferences(&mut self) -> Task<Message> {
+        if self.preferences_dirty.is_none() || self.preferences_pending {
+            return Task::none();
+        }
+        let values = self.preferences.clone();
+        let (reply, receive) = futures::channel::oneshot::channel();
+        match self
+            .client
+            .commands
+            .try_send(runtime::Command::WindowPreferences(values.clone(), reply))
+        {
+            Ok(()) => {
+                self.preferences_pending = true;
+                Task::perform(
+                    async move {
+                        receive.await.unwrap_or_else(|_| {
+                            Err("Receiver stopped before preferences were saved".into())
+                        })
+                    },
+                    move |r| Message::PreferencesSaved(values.clone(), r),
+                )
+            }
+            Err(e) => {
+                self.client
+                    .shared
+                    .report(format!("Could not remember window preferences: {e}"));
+                if self.quit_requested {
+                    iced::exit()
+                } else {
+                    Task::none()
+                }
+            }
+        }
+    }
     fn update(&mut self, message: Message) -> Task<Message> {
+        if matches!(
+            &message,
+            Message::Name(_)
+                | Message::Width(_)
+                | Message::Height(_)
+                | Message::Fps(_)
+                | Message::Gpu(_)
+                | Message::Hardware(_)
+                | Message::Hevc(_)
+                | Message::Vsync(_)
+                | Message::Hls(_)
+                | Message::MinimizeTray(_)
+                | Message::CloseTray(_)
+                | Message::Autostart(_)
+                | Message::StartHidden(_)
+        ) {
+            self.form.changed();
+        }
         match message {
             Message::Opened | Message::Frame | Message::Status => {
                 self.refresh();
@@ -558,6 +643,13 @@ impl App {
                     return Task::done(Message::Quit);
                 }
                 self.refresh();
+                let controls_just_hidden = self.controls_visible
+                    && !self.controls_hovered
+                    && self.controls_used.elapsed() >= Duration::from_secs(2);
+                if controls_just_hidden {
+                    self.controls_visible = false;
+                }
+
                 if self.directory.join("restore-window").exists() {
                     let _ = std::fs::remove_file(self.directory.join("restore-window"));
                     return self.open_window();
@@ -609,14 +701,22 @@ impl App {
                 if !self.last_capture
                     && self.args.screenshot.is_some()
                     && self.client.shared.started.elapsed() > Duration::from_secs(1)
+                    && !controls_just_hidden
+                    && (!self.fullscreen || !self.controls_visible)
+                    && let Some(id) = self.window
                 {
                     self.last_capture = true;
-                    if let Some(id) = self.window {
-                        return window::screenshot(id).map(Message::Screenshot);
-                    }
+                    return window::screenshot(id).map(Message::Screenshot);
                 }
                 if let Some(task) = self.reveal_video() {
                     return task;
+                }
+                if self
+                    .preferences_dirty
+                    .is_some_and(|t| t.elapsed() >= Duration::from_millis(500))
+                    && !self.preferences_pending
+                {
+                    return self.save_preferences();
                 }
                 if let Some(id) = self.window {
                     return window::is_minimized(id)
@@ -628,6 +728,8 @@ impl App {
                     return Task::none();
                 }
                 let session = self.active_session();
+                self.controls_visible = false;
+                self.controls_hovered = false;
                 self.connection_reveal.dismiss(session);
                 self.client
                     .shared
@@ -640,17 +742,39 @@ impl App {
                     .ui
                     .visible
                     .store(false, Ordering::Release);
-                if self.tray_available() {
+                let preferences = self.save_preferences();
+                if self.tray_available() && self.form.saved.close_to_tray {
                     self.window = None;
-                    return window::close(id);
+                    return Task::batch([window::close(id), preferences]);
                 } else {
-                    return window::minimize(id, true);
+                    self.close_minimized = true;
+                    return Task::batch([window::minimize(id, true), preferences]);
                 }
             }
             Message::Window(id, window::Event::Resized(size)) => {
+                if self.window == Some(id) {
+                    self.viewport = size;
+                }
                 if self.window == Some(id) && !self.fullscreen {
-                    self.settings.window_width = size.width as u32;
-                    self.settings.window_height = size.height as u32;
+                    let revision = self.window_mode_revision;
+                    return window::mode(id)
+                        .map(move |mode| Message::CheckedSize(id, size, mode, revision));
+                }
+            }
+            Message::CheckedSize(id, size, mode, revision) => {
+                if self.window == Some(id)
+                    && !self.fullscreen
+                    && mode == window::Mode::Windowed
+                    && revision == self.window_mode_revision
+                    && size.width >= 760.
+                    && size.height >= 520.
+                {
+                    let (w, h) = (size.width as u32, size.height as u32);
+                    if (w, h) != (self.preferences.width, self.preferences.height) {
+                        self.preferences.width = w;
+                        self.preferences.height = h;
+                        self.preferences_dirty = Some(Instant::now());
+                    }
                 }
             }
             Message::Window(_, _) => {}
@@ -679,7 +803,14 @@ impl App {
                     .ui
                     .visible
                     .store(!minimized, Ordering::Release);
-                if minimized && self.settings.minimize_to_tray && self.tray_available() {
+                if !minimized {
+                    self.close_minimized = false;
+                }
+                if minimized
+                    && !self.close_minimized
+                    && self.form.saved.minimize_to_tray
+                    && self.tray_available()
+                {
                     return Task::done(Message::Hide);
                 }
             }
@@ -708,7 +839,11 @@ impl App {
             },
             Message::Fullscreen => {
                 self.fullscreen = !self.fullscreen;
-                self.settings.fullscreen = self.fullscreen;
+                self.window_mode_revision += 1;
+                self.preferences.fullscreen = self.fullscreen;
+                self.preferences_dirty = Some(Instant::now());
+                self.controls_visible = false;
+                self.controls_hovered = false;
                 if self.fullscreen {
                     self.fullscreen_return_page = Some(self.page);
                     self.page = 0;
@@ -726,20 +861,45 @@ impl App {
                     .store(0, Ordering::Relaxed);
                 self.refresh();
                 if let Some(id) = self.window {
-                    return window::set_mode(
-                        id,
-                        if self.fullscreen {
-                            window::Mode::Fullscreen
-                        } else {
-                            window::Mode::Windowed
-                        },
-                    );
+                    return Task::batch([
+                        self.save_preferences(),
+                        window::set_mode(
+                            id,
+                            if self.fullscreen {
+                                window::Mode::Fullscreen
+                            } else {
+                                window::Mode::Windowed
+                            },
+                        ),
+                    ]);
                 }
             }
             Message::Crop => self.crop = !self.crop,
             Message::Focus => {
                 self.focus = !self.focus;
-                self.settings.hide_ui = self.focus;
+                self.preferences.hide_ui = self.focus;
+                self.preferences_dirty = Some(Instant::now());
+                self.controls_visible = false;
+                self.controls_hovered = false;
+                return self.save_preferences();
+            }
+            Message::Pointer => {
+                if self.fullscreen || self.focus {
+                    self.controls_visible = true;
+                    self.controls_used = Instant::now();
+                }
+            }
+            Message::ControlsHovered(v) => {
+                self.controls_hovered = v;
+                self.controls_used = Instant::now();
+            }
+            Message::LeavePresentation => {
+                if self.fullscreen {
+                    return Task::done(Message::Fullscreen);
+                }
+                if self.focus {
+                    return Task::done(Message::Focus);
+                }
             }
             Message::Escape => {
                 if self.fullscreen {
@@ -751,6 +911,8 @@ impl App {
             }
             Message::Hide => {
                 if self.tray_available() {
+                    self.controls_visible = false;
+                    self.controls_hovered = false;
                     let session = self.active_session();
                     self.connection_reveal.dismiss(session);
                     self.client
@@ -765,12 +927,45 @@ impl App {
                         .visible
                         .store(false, Ordering::Release);
                     if let Some(id) = self.window.take() {
-                        return window::close(id);
+                        return Task::batch([window::close(id), self.save_preferences()]);
                     }
                 }
             }
 
-            Message::Quit => return iced::exit(),
+            Message::Quit => {
+                self.quit_requested = true;
+                if self.preferences_pending {
+                    return Task::none();
+                }
+                if self.preferences_dirty.is_some() {
+                    return self.save_preferences();
+                }
+                return iced::exit();
+            }
+            Message::PreferencesSaved(values, result) => {
+                self.preferences_pending = false;
+                match result {
+                    Ok(saved) => {
+                        WindowPreferences::from_settings(&saved).apply(&mut self.form.saved);
+                        if self.preferences == values {
+                            self.preferences_dirty = None;
+                        }
+                    }
+                    Err(error) => {
+                        self.client
+                            .shared
+                            .report(format!("Could not remember window preferences: {error}"));
+                        self.preferences_dirty = Some(Instant::now());
+                        if self.quit_requested {
+                            crate::platform::startup_error(&error);
+                            return iced::exit();
+                        }
+                    }
+                }
+                if self.quit_requested {
+                    return Task::done(Message::Quit);
+                }
+            }
             Message::Disconnect => {
                 let _ = self
                     .client
@@ -784,49 +979,110 @@ impl App {
             }
             Message::ClearError => self.client.shared.ui.lock().unwrap().error.clear(),
             Message::Save => {
-                let result = (|| -> Result<()> {
-                    self.settings.mirror_width = self.width.parse()?;
-                    self.settings.mirror_height = self.height.parse()?;
-                    self.settings.max_fps = self.fps.parse()?;
-                    self.settings.refresh_rate = self.settings.max_fps;
-                    self.settings.validate()?;
-                    Ok(())
-                })();
-                if let Err(e) = result {
-                    self.client.shared.report(format!("{e:#}"))
-                } else {
-                    let _ = self
-                        .client
-                        .commands
-                        .try_send(runtime::Command::Settings(self.settings.clone()))
-                        .map_err(|e| {
-                            self.client
-                                .shared
-                                .report(format!("Could not apply settings: {e}"))
-                        });
+                if self.form.pending.is_some() || self.form.audio_pending {
+                    return Task::none();
+                }
+                let candidate = match self.form.validate() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.form.feedback = e;
+                        return Task::none();
+                    }
+                };
+                let (reply, receive) = futures::channel::oneshot::channel();
+                if let Err(e) = self
+                    .client
+                    .commands
+                    .try_send(runtime::Command::Settings(candidate, reply))
+                {
+                    self.form.committed(Err(e.to_string()));
+                    return Task::none();
+                }
+                return Task::perform(
+                    async move {
+                        receive.await.unwrap_or_else(|_| {
+                            Err("Receiver stopped before settings were saved".into())
+                        })
+                    },
+                    Message::SettingsSaved,
+                );
+            }
+            Message::SettingsSaved(result) => self.form.committed(result),
+            Message::Reset => self.form.reset(),
+            Message::Name(v) => self.form.draft.name = v,
+            Message::Width(v) => self.form.width = v,
+            Message::Height(v) => self.form.height = v,
+            Message::Fps(v) => self.form.fps = v,
+            Message::Gpu(v) => self.form.draft.gpu_preference = v,
+            Message::Audio(v) => {
+                if self.form.audio_pending
+                    || self.form.pending.is_some()
+                    || v.id == self.form.saved.audio_device
+                {
+                    return Task::none();
+                }
+                self.form.draft.audio_device = v.id.clone();
+                self.form.audio_pending = true;
+                self.form.feedback = "Saving audio output preference…".into();
+                let (reply, receive) = futures::channel::oneshot::channel();
+                if let Err(e) = self
+                    .client
+                    .commands
+                    .try_send(runtime::Command::AudioOutput(v.id, reply))
+                {
+                    return Task::done(Message::AudioSaved(Err(e.to_string())));
+                }
+                return Task::perform(
+                    async move {
+                        receive.await.unwrap_or_else(|_| {
+                            Err("Receiver stopped before audio preference was saved".into())
+                        })
+                    },
+                    Message::AudioSaved,
+                );
+            }
+            Message::AudioSaved(result) => {
+                self.form.audio_pending = false;
+                match result {
+                    Ok(saved) => {
+                        self.form.saved.audio_device = saved.audio_device.clone();
+                        self.form.draft.audio_device = saved.audio_device;
+                        self.form.feedback =
+                            "Audio output saved; active output switches automatically".into();
+                    }
+                    Err(e) => {
+                        self.form
+                            .draft
+                            .audio_device
+                            .clone_from(&self.form.saved.audio_device);
+                        self.form.feedback = format!("Could not change audio output: {e}");
+                    }
                 }
             }
-            Message::Reset => {
-                self.settings = Settings::default();
-                self.width = self.settings.mirror_width.to_string();
-                self.height = self.settings.mirror_height.to_string();
-                self.fps = self.settings.max_fps.to_string();
-            }
-            Message::Name(v) => self.settings.name = v,
-            Message::Width(v) => self.width = v,
-            Message::Height(v) => self.height = v,
-            Message::Fps(v) => self.fps = v,
-            Message::Gpu(v) => self.settings.gpu_preference = v,
-            Message::Audio(v) => self.settings.audio_device = v.id,
-            Message::Hardware(v) => self.settings.hardware_decode = v,
-            Message::Hevc(v) => self.settings.hevc_enabled = v,
-            Message::Vsync(v) => self.settings.vsync = v,
-            Message::Hls(v) => self.settings.hls_enabled = v,
-            Message::MinimizeTray(v) => self.settings.minimize_to_tray = v,
-            Message::Autostart(v) => self.settings.autostart = v,
-            Message::StartHidden(v) => self.settings.start_hidden = v,
+            Message::Hardware(v) => self.form.draft.hardware_decode = v,
+            Message::Hevc(v) => self.form.draft.hevc_enabled = v,
+            Message::Vsync(v) => self.form.draft.vsync = v,
+            Message::Hls(v) => self.form.draft.hls_enabled = v,
+            Message::MinimizeTray(v) => self.form.draft.minimize_to_tray = v,
+            Message::CloseTray(v) => self.form.draft.close_to_tray = v,
+            Message::Autostart(v) => self.form.draft.autostart = v,
+            Message::StartHidden(v) => self.form.draft.start_hidden = v,
             Message::Volume(v) => {
                 self.client.shared.ui.lock().unwrap().volume_db = v;
+                self.status.volume_db = v;
+                self.last_audible_db = v;
+                self.controls_used = Instant::now();
+            }
+            Message::Mute => {
+                let db = if self.status.volume_db <= -100. {
+                    self.last_audible_db
+                } else {
+                    self.last_audible_db = self.status.volume_db;
+                    -144.
+                };
+                self.client.shared.ui.lock().unwrap().volume_db = db;
+                self.status.volume_db = db;
+                self.controls_used = Instant::now();
             }
             Message::Screenshot(capture) => {
                 if let Some(path) = &self.args.screenshot
@@ -864,22 +1120,53 @@ impl App {
                     background: Some(iced::Color::BLACK.into()),
                     ..Default::default()
                 });
-            if self.status.error.is_empty() {
-                return player.into();
-            }
-            return widget::stack![
-                player,
-                container(
-                    row![
-                        text(&self.status.error).size(13),
-                        button("Dismiss").on_press(Message::ClearError)
-                    ]
-                    .spacing(12)
+            let mut layers = widget::stack![player];
+            if self.controls_visible {
+                let controls = widget::mouse_area(
+                    container(self.player_controls(true))
+                        .width(Length::Fill)
+                        .max_width(960.)
+                        .height(if self.viewport.width < 740. {
+                            112.
+                        } else {
+                            64.
+                        })
+                        .padding(14)
+                        .style(container::rounded_box),
                 )
-                .padding(12)
-                .style(container::rounded_box)
-            ]
-            .into();
+                .on_enter(Message::ControlsHovered(true))
+                .on_exit(Message::ControlsHovered(false));
+                layers = layers.push(
+                    container(column![
+                        widget::space().height(Length::Fill),
+                        container(controls).center_x(Length::Fill)
+                    ])
+                    .padding(16)
+                    .height(Length::Fill)
+                    .width(Length::Fill),
+                );
+            }
+            if !self.status.error.is_empty() {
+                layers = layers.push(
+                    container(
+                        row![
+                            text(&self.status.error).size(13),
+                            button("Dismiss").on_press(Message::ClearError)
+                        ]
+                        .spacing(12),
+                    )
+                    .padding(12)
+                    .style(container::rounded_box),
+                );
+            }
+            return widget::mouse_area(layers)
+                .on_move(|_| Message::Pointer)
+                .interaction(if self.controls_visible {
+                    iced::mouse::Interaction::Idle
+                } else {
+                    iced::mouse::Interaction::Hidden
+                })
+                .into();
         }
         let navigation = column![
             text("AIRPLAY").size(13),
@@ -919,11 +1206,11 @@ impl App {
         .padding(22)
         .width(190);
         let content:Element<'_,Message,Theme,Renderer>=match self.page {
-            1=>scrollable(column![text("Receiver settings").size(28),text("Network and decoder settings apply to the next connection. GPU selection applies on restart. Audio output changes immediately.").size(13),text_input("Receiver name",&self.settings.name).on_input(Message::Name),row![text_input("Width",&self.width).on_input(Message::Width),text_input("Height",&self.height).on_input(Message::Height),text_input("FPS",&self.fps).on_input(Message::Fps)].spacing(10),checkbox(self.settings.hardware_decode).label("Hardware decoding").on_toggle(Message::Hardware),checkbox(self.settings.hevc_enabled).label("Advertise HEVC").on_toggle(Message::Hevc),checkbox(self.settings.vsync).label("VSync (restart)").on_toggle(Message::Vsync),checkbox(self.settings.hls_enabled).label("HLS / FCUP playback").on_toggle(Message::Hls),text("Render adapter preference"),pick_list(vec!["balanced".to_string(),"low-power".into(),"high-performance".into()],Some(self.settings.gpu_preference.clone()),Message::Gpu),text("Audio output"),pick_list(self.devices.clone(),self.devices.iter().find(|d|d.id==self.settings.audio_device).cloned(),Message::Audio),checkbox(self.settings.minimize_to_tray).label("Minimize to tray").on_toggle(Message::MinimizeTray),checkbox(self.settings.start_hidden).label("Start in tray").on_toggle(Message::StartHidden),checkbox(self.settings.autostart).label("Start with Windows").on_toggle(Message::Autostart),row![button("Save settings").on_press(Message::Save),button("Reset form").on_press(Message::Reset)].spacing(12)].spacing(16).padding(28)).into(),
+            1=>self.settings_view(),
             2=>column![text("Diagnostics").size(28),text(&self.metrics_text),text(format!("Source: {}\nCodec: {}\nDecoder: {}\nDimensions: {}\nAudio: {}",self.status.peer,self.status.codec,self.status.decoder,self.status.dimensions,self.status.audio_status)),text(self.client.shared.metrics.video_colour_label()),text(&self.status.addresses).size(13),text("Iced + wgpu · cpal / WASAPI · FFmpeg LGPL DLL profile"),text("Counters describe new GPU submissions, not measured screen scanout. Hardware performance and end-to-end AV latency require Windows/iPhone acceptance measurements.").size(13),text(format!("Version {}",env!("CARGO_PKG_VERSION")))].spacing(22).padding(28).into(),
             _=>{
                 let video = self.video_view();
-                column![row![text(if self.status.device.is_empty(){"Your screen, here"}else{&self.status.device}).size(24),widget::space().width(Length::Fill),button("Disconnect").on_press_maybe((!self.status.peer.is_empty()).then_some(Message::Disconnect))].spacing(12),container(video).width(Length::Fill).height(Length::Fill).style(|_|container::Style{background:Some(iced::Color::from_rgb8(9,12,20).into()),border:iced::Border{radius:12.into(),..Default::default()},..Default::default()}),row![button("Fullscreen · F11").style(button::secondary).on_press(Message::Fullscreen),button(if self.crop{"Fit"}else{"Fill / crop"}).style(button::secondary).on_press(Message::Crop),widget::space().width(Length::Fill),text(self.client.shared.metrics.video_colour_label()).size(12),text("Volume"),slider(-60.0..=0.,self.status.volume_db,Message::Volume).width(140)].spacing(14).align_y(iced::Alignment::Center)].spacing(20).padding(24).into()
+                column![row![text(if self.status.device.is_empty(){"Your screen, here"}else{&self.status.device}).size(24),widget::space().width(Length::Fill),button("Disconnect").on_press_maybe((!self.status.peer.is_empty()).then_some(Message::Disconnect))].spacing(12),container(video).width(Length::Fill).height(Length::Fill).style(|_|container::Style{background:Some(iced::Color::from_rgb8(9,12,20).into()),border:iced::Border{radius:12.into(),..Default::default()},..Default::default()}),self.player_controls(false)].spacing(20).padding(24).into()
             }
         };
         let mut body = column![content].height(Length::Fill).width(Length::Fill);
@@ -947,6 +1234,208 @@ impl App {
         )
         .height(Length::Fill)
         .into()
+    }
+    fn settings_view(&self) -> Element<'_, Message, Theme, Renderer> {
+        fn field<'a>(
+            label: &'static str,
+            value: &'a str,
+            error: Option<&'a str>,
+            on_input: fn(String) -> Message,
+        ) -> Element<'a, Message, Theme, Renderer> {
+            let mut field = column![
+                text(label).size(13),
+                text_input("", value).on_input(on_input).padding(8)
+            ]
+            .spacing(6)
+            .width(Length::Fill);
+            if let Some(error) = error {
+                field = field.push(
+                    text(error)
+                        .size(12)
+                        .color(iced::Color::from_rgb8(244, 128, 128)),
+                );
+            }
+            field.into()
+        }
+        let f = &self.form;
+        let video = column![
+            text("Video & receiver").size(19),
+            field(
+                "Receiver name",
+                &f.draft.name,
+                f.errors.name.as_deref(),
+                Message::Name
+            ),
+            row![
+                field(
+                    "Width · px",
+                    &f.width,
+                    f.errors.width.as_deref(),
+                    Message::Width
+                ),
+                field(
+                    "Height · px",
+                    &f.height,
+                    f.errors.height.as_deref(),
+                    Message::Height
+                ),
+                field(
+                    "Frame rate · fps",
+                    &f.fps,
+                    f.errors.fps.as_deref(),
+                    Message::Fps
+                )
+            ]
+            .spacing(12),
+            checkbox(f.draft.hardware_decode)
+                .label("Hardware decoding")
+                .on_toggle(Message::Hardware),
+            checkbox(f.draft.hevc_enabled)
+                .label("Advertise HEVC")
+                .on_toggle(Message::Hevc),
+            checkbox(f.draft.hls_enabled)
+                .label("HLS / FCUP playback")
+                .on_toggle(Message::Hls),
+            checkbox(f.draft.vsync)
+                .label("VSync · restart required")
+                .on_toggle(Message::Vsync),
+            text("Render adapter · restart required").size(13),
+            pick_list(
+                vec![
+                    "balanced".to_owned(),
+                    "low-power".to_owned(),
+                    "high-performance".to_owned()
+                ],
+                Some(f.draft.gpu_preference.clone()),
+                Message::Gpu
+            ),
+        ]
+        .spacing(14);
+        let audio = column![
+            text("Audio output").size(19),
+            text("Choosing a device applies and saves immediately. Other edits remain unsaved.")
+                .size(12),
+            pick_list(
+                self.devices.clone(),
+                self.devices
+                    .iter()
+                    .find(|d| d.id == f.draft.audio_device)
+                    .cloned(),
+                Message::Audio
+            )
+            .placeholder("Saved output unavailable")
+            .width(Length::Fill),
+            text(if self.status.audio_status.is_empty() {
+                "Ready when audio starts"
+            } else {
+                &self.status.audio_status
+            })
+            .size(12)
+        ]
+        .spacing(12);
+        let desktop = column![
+            text("Desktop behaviour").size(19),
+            checkbox(f.draft.close_to_tray)
+                .label("Close window to tray")
+                .on_toggle(Message::CloseTray),
+            text(
+                "When off, closing minimizes to the taskbar. Receiving continues; use Quit to exit."
+            )
+            .size(12),
+            checkbox(f.draft.minimize_to_tray)
+                .label("Minimize to tray")
+                .on_toggle(Message::MinimizeTray),
+            checkbox(f.draft.start_hidden)
+                .label("Start in tray")
+                .on_toggle(Message::StartHidden),
+            checkbox(f.draft.autostart)
+                .label("Start with Windows")
+                .on_toggle(Message::Autostart),
+            text("Window size and presentation mode are remembered automatically.").size(12)
+        ]
+        .spacing(12);
+        let form = column![
+            container(video).padding(18).style(container::rounded_box),
+            container(audio).padding(18).style(container::rounded_box),
+            container(desktop).padding(18).style(container::rounded_box)
+        ]
+        .spacing(16);
+        let busy = f.pending.is_some() || f.audio_pending;
+        let state = if busy {
+            "Saving…"
+        } else if f.dirty() {
+            "Unsaved changes"
+        } else {
+            "All changes saved"
+        };
+        column![text("Receiver settings").size(28),text("Save video and desktop changes below. Network/decoder: next connection; GPU/VSync: restart.").size(12),
+            scrollable(form).height(Length::Fill),
+            text(if f.feedback.is_empty() { " " } else { &f.feedback }).size(13),
+            row![button(if busy{"Saving…"}else{"Save settings"}).on_press_maybe((!busy && f.dirty()).then_some(Message::Save)),button("Reset form").style(button::secondary).on_press_maybe((!busy).then_some(Message::Reset)),widget::space().width(Length::Fill),text(state).size(12)].spacing(12).align_y(iced::Alignment::Center)
+        ].spacing(14).padding(28).height(Length::Fill).into()
+    }
+    fn player_controls(&self, presentation: bool) -> Element<'_, Message, Theme, Renderer> {
+        let available_width = if presentation {
+            (self.viewport.width - 32.).min(960.) - 28.
+        } else {
+            self.viewport.width - 260.
+        };
+        let actions = row![
+            button(if presentation {
+                if self.fullscreen {
+                    "Exit fullscreen"
+                } else {
+                    "Show controls"
+                }
+            } else {
+                "Fullscreen · F11"
+            })
+            .style(button::secondary)
+            .on_press(if presentation {
+                Message::LeavePresentation
+            } else {
+                Message::Fullscreen
+            }),
+            button(if self.crop { "Fit" } else { "Fill / crop" })
+                .style(button::secondary)
+                .on_press(Message::Crop),
+            widget::space().width(Length::Fill),
+            text(self.client.shared.metrics.video_colour_label()).size(12)
+        ]
+        .spacing(12)
+        .align_y(iced::Alignment::Center);
+        let volume = row![
+            button(if self.status.volume_db <= -100. {
+                "Unmute"
+            } else {
+                "Mute"
+            })
+            .style(button::secondary)
+            .on_press(Message::Mute),
+            slider(
+                -60.0..=0.,
+                self.status.volume_db.clamp(-60., 0.),
+                Message::Volume
+            )
+            .width(Length::Fill),
+            text(if self.status.volume_db <= -100. {
+                "Muted".into()
+            } else {
+                format!("{:.0} dB", self.status.volume_db)
+            })
+            .size(12)
+            .width(52)
+        ]
+        .spacing(12)
+        .align_y(iced::Alignment::Center);
+        if available_width < 680. {
+            column![actions, volume].spacing(12).into()
+        } else {
+            row![actions, container(volume).width(260)]
+                .spacing(16)
+                .align_y(iced::Alignment::Center)
+                .into()
+        }
     }
     fn video_view(&self) -> Element<'_, Message, Theme, Renderer> {
         if let Some(frame) = &self.frame {
@@ -980,7 +1469,7 @@ impl App {
         } else {
             "Waiting for video"
         };
-        let mut ready = column![text(title).size(29), text(&self.settings.name).size(20),
+        let mut ready = column![text(title).size(29), text(&self.form.saved.name).size(20),
             text(if self.status.peer.is_empty() {
                 "Open Screen Mirroring on your iPhone or iPad.\nConnect through your LAN or Windows mobile hotspot."
             } else { &self.status.title }).size(14)]

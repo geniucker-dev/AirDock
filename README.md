@@ -45,10 +45,14 @@ iPhone/iPad's Screen Mirroring menu. HLS/FCUP playback can be enabled in setting
 Settings and identity use the existing application configuration directory.
 
 F11 shows the video alone in fullscreen; Escape returns to the previous page.
+Moving the mouse shows playback controls, which hide after inactivity unless hovered.
 Video keeps its aspect ratio unless Fill/crop was selected. Ctrl+H hides/restores
 controls, Ctrl+D disconnects and Ctrl+Q quits. The Windows tray restores/hides the presentation window,
 disconnects the sender, or quits the whole application. Closing the window does
-not mean quitting the receiver.
+not mean quitting the receiver. With Close window to tray disabled, closing
+minimizes to the taskbar instead. Window size/presentation mode save automatically.
+Audio-device selection applies and saves immediately; other settings use Save,
+with field validation and explicit unsaved/saved feedback.
 New video sessions automatically show a hidden/minimized player. Audio-only
 connections remain in the tray. Hiding an ongoing session is respected until a
 new connection; FLUSH and format changes do not repeatedly reopen the window.
@@ -61,7 +65,11 @@ The [migration report](docs/RUST_MIGRATION_REPORT.md) lists the delivered change
 executed regressions, package contents and remaining physical checks.
 The Windows package uses audited LGPL FFmpeg DLLs, includes corresponding patched
 source/build material and required notices, and is tested again with a clean PATH.
-CI and manual release dispatch build the checked-out Iced implementation.
+CI and manual release dispatch build the checked-out Iced implementation. Both
+provide a per-user Windows installer (`*-setup.exe`), the portable ZIP
+(`*-portable.zip`) and `SHA256SUMS.txt`. The installer needs no administrator
+rights; upgrades and uninstall preserve configuration, pairing identity and
+untracked user files. The current installer is unsigned.
 
 GPU readback/protocol tests do not establish real Windows/iPhone FPS, latency,
 power, device hotplug or long-term AV drift. Those measurements must compare

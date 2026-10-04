@@ -23,6 +23,11 @@ and logs; do not infer physical hardware acceptance from a green build.
 - Encrypted mirroring and repeated reconnection integration fixtures.
 - HLS transport stream and fragmented MP4 decode, PCM counts and cancellation.
 - Iced Xvfb pages/settings/fullscreen/focus/resize regression.
+- Real UI interactions verify immediate audio selection with an unsaved draft,
+  debounced geometry persistence and restart, validation without partial writes,
+  reset/save separation, fullscreen mouse controls, mute/unmute and auto-hide.
+- Runtime regressions verify independent audio/window updates survive a stale
+  settings form, and a failed file write does not change active settings.
 - Encrypted fullscreen video reaches both screen edges with black aspect-ratio
   bars instead of UI chrome. Entry from settings/startup and page restoration,
   audio-only hiding, manual hide plus FLUSH and new-session auto-reveal are
@@ -45,6 +50,14 @@ Rust dependency notices cover the Windows dependency closure, including build
 dependencies. Crates that omit workspace license texts use checked-in supplements
 from the exact `.cargo_vcs_info.json` commit, with source URLs and SHA-256 hashes.
 Packaging fails on missing texts or hash mismatches, and audits the copied texts.
+
+Installer and portable ZIP originate from that same audited payload. ZIP entries
+and installed files are checked against `PACKAGE_SHA256.json`; release checks
+verify both asset hashes. Windows CI performs silent install, upgrade/repair,
+obsolete-DLL cleanup, installed clean-PATH HDR mirror/fMP4 playback, reinstall
+and uninstall. It preserves legacy configuration, pairing identity and untracked
+files and verifies autostart ownership. This validates packaging, not physical
+tray interaction or default-device switching.
 
 A package is validated only when that workflow and the final DLL audit succeed.
 Linux development uses system FFmpeg; its license/configuration do not certify

@@ -125,6 +125,7 @@ jobs:
           New-Item -ItemType Directory -Force dist-rust/docs,dist-rust/sources | Out-Null
           Copy-Item docs/RUST*.md,docs/CPP_REFERENCE_README.md dist-rust/docs/
           Copy-Item rust/src/playfair_data/AIRFRY-LICENSE.txt dist-rust/
+          Copy-Item tools/installer/INNO-LICENSE.txt dist-rust/INSTALLER_LICENSE.txt
           Copy-Item -Recurse "$env:RUST_NATIVE_ROOT/x64-windows/share" dist-rust/native-licenses
           Copy-Item "$env:RUST_NATIVE_ROOT/x64-windows/share/ffmpeg/ffmpeg-source.zip" dist-rust/sources/
           Copy-Item -Recurse rust/native/ports dist-rust/sources/native-build
@@ -151,10 +152,34 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "$env:pythonLocation/python.exe" tools/rust_hls_integration.py --fmp4 --hdr hlg --binary dist-rust/airplay-windows.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build portable archive and user-level installer from audited payload
+        shell: pwsh
+        run: |
+          $compiler = 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path $compiler)) {
+            choco install innosetup --version=6.4.3 --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          if (-not (Test-Path $compiler)) { throw 'Inno Setup compiler unavailable' }
+          python tools/rust_distributions.py --package dist-rust --output dist-release --compiler "$compiler" --commit "$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify installation upgrade playback and uninstall
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist-release/*-setup.exe
+          if (@($setup).Count -ne 1) { throw 'Expected exactly one installer' }
+          python tools/rust_installer_verify.py --setup "$($setup.FullName)" --package dist-rust --output rust-validation/installer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: airplay-windows-rust-x64-${{ github.sha }}
           path: dist-rust/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: airplay-windows-rust-distributions-x64-${{ github.sha }}
+          path: dist-release/
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@v4

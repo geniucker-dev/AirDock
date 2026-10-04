@@ -1,5 +1,5 @@
 use crate::{
-    config::Settings,
+    config::{Settings, WindowPreferences},
     crypto,
     discovery::Discovery,
     platform,
@@ -19,7 +19,18 @@ use std::{
 };
 pub enum Command {
     Disconnect,
-    Settings(Settings),
+    Settings(
+        Settings,
+        futures::channel::oneshot::Sender<Result<Settings, String>>,
+    ),
+    AudioOutput(
+        String,
+        futures::channel::oneshot::Sender<Result<Settings, String>>,
+    ),
+    WindowPreferences(
+        WindowPreferences,
+        futures::channel::oneshot::Sender<Result<Settings, String>>,
+    ),
     Quit,
 }
 #[derive(Clone)]
@@ -53,23 +64,69 @@ impl Runtime {
                     match receiver.recv_timeout(Duration::from_secs(1)) {
                         Ok(Command::Disconnect) => state.request_disconnect(),
                         Ok(Command::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                        Ok(Command::Settings(settings)) => {
+                        Ok(Command::Settings(mut settings, reply)) => {
                             let result = (|| -> Result<()> {
-                                let previous_autostart = state.settings.read().unwrap().autostart;
-                                platform::autostart(settings.autostart)?;
+                                let current = state.settings.read().unwrap().clone();
+                                // Draft saves cannot overwrite independently committed audio/geometry.
+                                WindowPreferences::from_settings(&current).apply(&mut settings);
+                                settings.audio_device.clone_from(&current.audio_device);
+                                settings.validate()?;
+                                let previous_autostart = current.autostart;
+                                if settings.autostart != previous_autostart {
+                                    platform::autostart(settings.autostart)?;
+                                }
                                 if let Err(error) = settings.save(&directory.join("settings.json"))
                                 {
-                                    let _ = platform::autostart(previous_autostart);
+                                    if settings.autostart != previous_autostart {
+                                        let _ = platform::autostart(previous_autostart);
+                                    }
                                     return Err(error);
                                 }
                                 *state.settings.write().unwrap() = settings;
                                 drop(discovery.take());
-                                discovery = Some(Discovery::start(server.device())?);
+                                match Discovery::start(server.device()) {
+                                    Ok(d) => discovery = Some(d),
+                                    Err(e) => state.report(format!(
+                                        "Settings saved; discovery unavailable: {e:#}"
+                                    )),
+                                }
                                 Ok(())
                             })();
-                            if let Err(e) = result {
-                                state.report(format!("Settings: {e:#}"));
+                            let _ = reply.send(
+                                result
+                                    .map(|_| state.settings.read().unwrap().clone())
+                                    .map_err(|e| format!("{e:#}")),
+                            );
+                        }
+                        Ok(Command::AudioOutput(device, reply)) => {
+                            let mut settings = state.settings.read().unwrap().clone();
+                            settings.audio_device = device;
+                            let result = settings.save(&directory.join("settings.json"));
+                            if result.is_ok() {
+                                *state.settings.write().unwrap() = settings;
                             }
+                            let _ = reply.send(
+                                result
+                                    .map(|_| state.settings.read().unwrap().clone())
+                                    .map_err(|e| format!("{e:#}")),
+                            );
+                        }
+                        Ok(Command::WindowPreferences(preferences, reply)) => {
+                            let mut settings = state.settings.read().unwrap().clone();
+                            preferences.apply(&mut settings);
+                            let result = if settings == *state.settings.read().unwrap() {
+                                Ok(())
+                            } else {
+                                settings.save(&directory.join("settings.json"))
+                            };
+                            if result.is_ok() {
+                                *state.settings.write().unwrap() = settings;
+                            }
+                            let _ = reply.send(
+                                result
+                                    .map(|_| state.settings.read().unwrap().clone())
+                                    .map_err(|e| format!("{e:#}")),
+                            );
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
                     }
@@ -113,5 +170,66 @@ impl Runtime {
 impl Drop for Runtime {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::channel::oneshot;
+    fn request(
+        runtime: &Runtime,
+        command: impl FnOnce(oneshot::Sender<Result<Settings, String>>) -> Command,
+    ) -> Result<Settings, String> {
+        let (sender, receiver) = oneshot::channel();
+        runtime.client.commands.send(command(sender)).unwrap();
+        futures::executor::block_on(receiver).unwrap()
+    }
+    #[test]
+    fn independent_preferences_survive_stale_form_and_failed_write_is_not_applied() {
+        let directory = std::env::temp_dir().join(format!(
+            "airplay-ui-preferences-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let initial = Settings::default();
+        let mut runtime = Runtime::start(directory.clone(), 0, initial.clone()).unwrap();
+        let prefs = WindowPreferences {
+            width: 960,
+            height: 640,
+            fullscreen: false,
+            hide_ui: false,
+        };
+        request(&runtime, |reply| Command::WindowPreferences(prefs, reply)).unwrap();
+        request(&runtime, |reply| {
+            Command::AudioOutput("Selected device".into(), reply)
+        })
+        .unwrap();
+        let mut stale_form = initial;
+        stale_form.name = "Saved form".into();
+        let saved = request(&runtime, |reply| Command::Settings(stale_form, reply)).unwrap();
+        assert_eq!(saved.window_width, 960);
+        assert_eq!(saved.audio_device, "Selected device");
+        assert_eq!(saved.name, "Saved form");
+        assert_eq!(
+            Settings::load(&directory.join("settings.json")).unwrap(),
+            saved
+        );
+        std::fs::remove_file(directory.join("settings.json")).unwrap();
+        std::fs::create_dir(directory.join("settings.json")).unwrap();
+        assert!(
+            request(&runtime, |reply| Command::AudioOutput(
+                "Must not apply".into(),
+                reply
+            ))
+            .is_err()
+        );
+        assert_eq!(*runtime.client.shared.settings.read().unwrap(), saved);
+        runtime.stop();
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -66,6 +66,23 @@ workflow never selects the retired C++ or Slint source. Physical Windows/iPhone
 feature and performance acceptance remains separately recorded and cannot be
 inferred from runner/WARP/llvmpipe checks.
 
+`rust-windows-build.yml` keeps the raw payload artifact and adds
+`airplay-windows-rust-distributions-x64-<commit>` containing the Inno Setup
+per-user installer, portable ZIP and SHA-256 checksums. `rust-release.yml`
+verifies and publishes those exact files, rather than repackaging a different
+payload. Dispatch with `publish=false` verifies release assembly without publishing.
+Inno Setup 6 is used only for distribution building; its notice is included as
+`INSTALLER_LICENSE.txt`. No Rust/native runtime dependency is added.
+
+Install defaults to `%LOCALAPPDATA%\Programs\AirPlay-Windows`. Start Menu
+shortcuts are installed; a desktop shortcut is optional. Configuration remains
+in the existing AppData directory. Upgrades remove obsolete files tracked by the
+previous installer manifest; untracked files are preserved. Uninstall removes an
+autostart entry only if it points to this installation. CI installs in a path
+containing spaces and Unicode, checks hashes/DLLs, upgrades, plays from the
+installed clean PATH, and verifies uninstall/data preservation. Installers are
+currently unsigned.
+
 
 The manifest's overlay triplet builds release DLLs only; Rust debug and release
 use those same playback DLLs through FFMPEG_DIR. The native cache is saved after

@@ -19,6 +19,9 @@ A separate source relationship review is required before any license change.
 - **Microsoft Visual C++ runtime**: Microsoft redistributable runtime DLLs are
   bundled when imported by the executable/native DLLs. Windows OS libraries and
   graphics drivers are system prerequisites and are not redistributed.
+- **Inno Setup installer**: Copyright Jordan Russell and Martijn Laan.
+  The installer incorporates Inno Setup; its license/acknowledgement accompanies
+  distributions as INSTALLER_LICENSE.txt. https://jrsoftware.org/isinfo.php
 - **Rust dependencies**: Cargo.lock pins versions. Distribution artifacts include
   source license texts and SPDX/repository metadata in rust-licenses/index.json.
 - **Rust PlayFair implementation/data**: existing port derived from nored/airfry;
