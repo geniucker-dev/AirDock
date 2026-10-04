@@ -81,15 +81,18 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Value, Exe: String;
 begin
-  if (CurUninstallStep = usUninstall) and
-      RegQueryStringValue(HKCU64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'AirPlay-Windows', Value) then begin
+  if CurUninstallStep <> usUninstall then Exit;
+  Log('Checking this installation autostart ownership.');
+  if RegQueryStringValue(HKCU64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'AirPlay-Windows', Value) then begin
     Value := Lowercase(Trim(Value));
     Exe := Lowercase(ExpandConstant('{app}\airplay-windows.exe'));
+    Log('Expected autostart executable: ' + Exe);
     if (Value = Exe) or (Pos('"' + Exe + '"', Value) = 1) or (Pos(Exe + ' ', Value) = 1) then begin
       if not RegDeleteValue(HKCU64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'AirPlay-Windows') then
         RaiseException('Cannot remove this installation autostart entry.');
       Log('Removed the 64-bit autostart entry owned by this installation.');
     end else
       Log('Preserved an autostart entry belonging to another installation.');
-  end;
+  end else
+    Log('No autostart entry found.');
 end;
