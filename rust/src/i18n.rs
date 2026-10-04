@@ -19,13 +19,11 @@ impl Language {
         }
         #[cfg(windows)]
         {
-            return if unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() } & 0x3ff
-                == 4
-            {
+            if unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() } & 0x3ff == 4 {
                 Self::Chinese
             } else {
                 Self::English
-            };
+            }
         }
         #[cfg(not(windows))]
         {

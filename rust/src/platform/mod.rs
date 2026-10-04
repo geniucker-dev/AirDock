@@ -418,10 +418,10 @@ pub fn desktop_work_area() -> Option<(u32, u32)> {
         )
         .ok()?;
         let scale = GetDpiForSystem().max(96) as f32 / 96.;
-        return Some((
+        Some((
             ((area.right - area.left) as f32 / scale - 32.).max(1.) as u32,
             ((area.bottom - area.top) as f32 / scale - 64.).max(1.) as u32,
-        ));
+        ))
     }
     #[cfg(not(windows))]
     None
