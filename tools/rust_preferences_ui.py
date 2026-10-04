@@ -60,13 +60,13 @@ def main():
     try:
         process,window=launch('initial')
         click(window,402,34)
-        edit(window,300,260,'Unsaved receiver draft')
+        edit(window,300,248,'Unsaved receiver draft')
         assert settings.read_bytes()==original
         # Wide settings places output selection beside receiver fields.
         ImageGrab.grab(xdisplay='').save(output/'audio-scrolled.png')
-        click(window,800,237)
+        click(window,800,225)
         ImageGrab.grab(xdisplay='').save(output/'audio-menu.png')
-        click(window,800,295)
+        click(window,800,283)
         until(lambda:stored().get('audio_device','default')!='default')
         selected=stored()['audio_device'];assert stored()['name']=='AirPlay-Windows'
         report['immediate_audio_preserves_unsaved_draft']='passed'
@@ -78,11 +78,11 @@ def main():
         process,window=launch('restart')
         assert geometry(window)=={'WIDTH':960,'HEIGHT':640}
         click(window,402,34)
-        edit(window,300,260,'Saved receiver')
+        edit(window,300,248,'Saved receiver')
         click(window,85,597)
         until(lambda:stored().get('name')=='Saved receiver')
         before=settings.read_bytes()
-        edit(window,140,335,'invalid')
+        edit(window,140,323,'invalid')
         click(window,85,597)
         assert settings.read_bytes()==before, 'Invalid form was partly applied'
         ImageGrab.grab(xdisplay='').save(output/'invalid-width.png')

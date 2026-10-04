@@ -55,8 +55,10 @@ not physical display FPS or C++/Slint performance parity measurements.
 
 The desktop now uses a compact top navigation, a black playback stage, Manrope
 Regular/SemiBold and a quiet steel-blue shell. Receive includes live new-submission
-FPS, internal processing time, bandwidth and skipped frames. Video, timing, audio
-and transport diagnostics expand in the same page. Settings adapts from two
+FPS, internal processing time, bandwidth and skipped frames in one small line.
+At 1120 × 760, the playback stage uses about 80% of the window height; diagnostic
+expansion leaves that allocation unchanged. Video, timing, audio
+and transport diagnostics open over the video without reducing its size. Settings adapts from two
 columns to one; video-only fullscreen and automatically hidden controls remain.
 Layout/styles are separate from desktop lifecycle. No idle animation was added.
 

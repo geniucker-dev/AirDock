@@ -114,7 +114,9 @@ bounded device reconstruction after device loss. Surface reconfiguration is
 separate from device reconstruction. Hidden startup obtains the primary monitor's adapter before decoding starts.
 D3D11VA attempts the DXGI adapter matching
 the render PCI vendor/device identity; NVDEC/CPU remain decode fallbacks. This
-is best-effort adapter matching, not a native GPU frame sharing interface. Software GPU adapters remain distinguishable
+is best-effort adapter matching at device creation, not a native GPU frame sharing
+interface. Moving the window to another GPU's monitor does not migrate a live
+device; restarting reselects the adapter. Software GPU adapters remain distinguishable
 from hardware. If GPU initialization fails, the software UI remains available
 with a clear video-support message; software UI does not secretly render the YUV
 primitive. Driver failures and cross-adapter cost still require physical Windows
@@ -159,8 +161,8 @@ historical GPL C++/test references are excluded from runtime linkage.
 ## Desktop presentation
 
 The Receive page gives the video most of the window, with a compact top navigation
-and a flat live statistics rail. Detailed video, clock, audio and transport status
-expand within Receive. Settings uses one scrollable form, two columns on wide
+and a compact one-line live statistics strip. Detailed video, clock, audio and transport status
+open over the video without shrinking its viewport. Settings uses one scrollable form, two columns on wide
 windows and one on narrow windows. `desktop/view.rs` owns layout;
 `desktop/appearance.rs` owns visual tokens/styles; `desktop/form.rs` owns drafts
 and validation. The UI does not animate while idle. Status is cloned on revision

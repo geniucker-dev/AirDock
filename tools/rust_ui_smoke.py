@@ -62,7 +62,7 @@ def main():
                     xdo('mousemove', '--window', window, 402, y)
                     xdo('click', 1)
                 if page in ('details', 'narrow-details'):
-                    xdo('mousemove', '--window', window, 920, 109)
+                    xdo('mousemove', '--window', window, 970, 735)
                     xdo('click', 1)
                 if page in ['focus', 'fullscreen']:
                     xdo('key', 'ctrl+h' if page == 'focus' else 'F11')
@@ -81,7 +81,7 @@ def main():
                     xdo('windowsize', window, 960, 640)
                 if page == 'edit-settings':
                     time.sleep(.15)
-                    xdo('mousemove', '--window', window, 300, 260)
+                    xdo('mousemove', '--window', window, 300, 248)
                     xdo('click', 1)
                     xdo('key', 'ctrl+a')
                     xdo('type', '--clearmodifiers', '--delay', 0, 'Iced UI acceptance')
@@ -106,12 +106,15 @@ def main():
             image = Image.open(capture).convert('RGB')
             def ink(box):
                 # Count actual dark text against the light chrome, not pale backgrounds.
-                return sum(1 for rgb in image.crop(box).getdata() if max(rgb) < 150)
-            rail_y = height-64 if page == 'receiver' else height-272
-            assert ink((24, rail_y, width-24, rail_y+42)) > 300, 'Reception statistics were not painted'
-            assert ink((24, rail_y-48, 115, rail_y-16)) > 70, 'Player button text disappeared'
+                return sum(1 for rgb in image.crop(box).getdata() if max(rgb) < 180)
+            rail_y = height-38
+            assert ink((12, rail_y, width-12, rail_y+26)) > 300, 'Reception statistics were not painted'
+            assert ink((12, rail_y-40, 115, rail_y-8)) > 70, 'Player button text disappeared'
             if page != 'receiver':
-                assert ink((40, height-205, width-40, height-45)) > (150 if page == 'narrow-details' else 500), 'Inline diagnostic text was not painted'
+                assert ink((width-378, 145, width-48, min(height-110, 550))) > 500, 'Inline diagnostic text was not painted'
+            if width >= 1000:
+                stage=image.crop((350,200,710,530))
+                assert sum(1 for rgb in stage.getdata() if min(rgb)>150)>1000, 'Capture lost the underlying player layer'
         captures[page] = {'width': width, 'height': height, 'sha256': hashlib.sha256(png).hexdigest(),
                           'viewport_sha256': hashlib.sha256(viewport).hexdigest()}
         if page == 'edit-settings':
@@ -125,6 +128,12 @@ def main():
             assert saved['name']=='AirPlay-Windows' and saved['vsync'] is False
             if page=='resize': assert (saved['window_width'],saved['window_height'])==(960,640),saved
             if page.startswith('fullscreen'): assert saved['fullscreen'] is True,saved
+    for page in ('receiver', 'details', 'narrow-details'):
+        with Image.open(output/(page+'.png')) as im:
+            # Details overlays the stage: it never changes the video allocation.
+            rgb=im.convert('RGB')
+            black_rows=[y for y in range(im.height) if max(rgb.getpixel((24,y)))<5]
+            assert min(black_rows)==69 and max(black_rows)>=im.height-90, (page,black_rows)
     assert captures['fullscreen']['width'] > captures['receiver']['width']
     assert captures['fullscreen-settings']['width'] == captures['fullscreen']['width']
     assert captures['resize']['width'] == 960

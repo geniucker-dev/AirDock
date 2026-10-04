@@ -155,8 +155,8 @@ impl App {
             .spacing(16)
             .align_y(iced::Alignment::Center),
         )
-        .padding([14, 24])
-        .height(68)
+        .padding([8, 16])
+        .height(56)
         .width(Length::Fill)
         .style(look::topbar)
         .into()
@@ -188,32 +188,6 @@ impl App {
             .metrics
             .receiver_view_builds
             .fetch_add(1, Ordering::Relaxed);
-        let title = if self.status.device.is_empty() {
-            "Receive".into()
-        } else {
-            self.status.device.clone()
-        };
-        let heading = row![
-            text(title).size(22).font(look::STRONG),
-            widget::space().width(Length::Fill),
-            button(
-                text(if self.diagnostics_expanded {
-                    "Hide details"
-                } else {
-                    "Playback details"
-                })
-                .size(13)
-            )
-            .padding([8, 12])
-            .style(look::secondary)
-            .on_press(Message::Diagnostics),
-            button(text("Disconnect").size(13))
-                .padding([8, 12])
-                .style(look::secondary)
-                .on_press_maybe((!self.status.peer.is_empty()).then_some(Message::Disconnect))
-        ]
-        .spacing(10)
-        .align_y(iced::Alignment::Center);
         let video = container(self.video_view())
             .width(Length::Fill)
             .height(Length::Fill)
@@ -221,56 +195,82 @@ impl App {
                 background: Some(iced::Color::BLACK.into()),
                 text_color: Some(iced::Color::WHITE),
                 border: iced::Border {
-                    radius: 12.into(),
+                    radius: 8.into(),
                     ..Default::default()
                 },
                 ..Default::default()
             });
-        let fps = stat("Frame rate", format!("{:.1} fps", self.stats.fps));
-        let processing = stat(
-            "Processing",
+        let mut stage = widget::stack![video]
+            .width(Length::Fill)
+            .height(Length::Fill);
+        if self.diagnostics_expanded {
+            let details = column![
+                row![text("Playback details").size(14).font(look::STRONG),
+                    widget::space().width(Length::Fill),
+                    button(text("Close").size(12)).padding([5,8]).style(look::secondary)
+                        .on_press(Message::Diagnostics)].align_y(iced::Alignment::Center),
+                scrollable(column![
+                    detail_group("Video", self.stats.video.clone()),
+                    detail_group("Timing", self.stats.timing.clone()),
+                    detail_group("Audio", self.stats.audio.clone()),
+                    text(self.stats.network.clone()).size(12).color(look::MUTED),
+                    text("FPS counts new video submissions. Processing excludes sender, network transit and physical screen latency.")
+                        .size(12).color(look::MUTED)
+                ].spacing(16)).height(Length::Fill)
+            ].spacing(12);
+            let panel = container(details)
+                .padding(16)
+                .width(370)
+                .height(Length::Fill)
+                .max_height(500)
+                .style(look::panel);
+            stage = stage.push(
+                container(row![widget::space().width(Length::Fill), panel])
+                    .padding(12)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            );
+        }
+        let summary = text(format!(
+            "{:.1} fps     Processing {}     {:.2} Mbps     Skipped {}",
+            self.stats.fps,
             self.stats
                 .processing_ms
                 .map(|v| format!("{v:.1} ms"))
                 .unwrap_or_else(|| "—".into()),
-        );
+            self.stats.mbps,
+            self.stats.dropped
+        ))
+        .size(12)
+        .color(look::MUTED);
         let rail = row![
-            fps,
-            processing,
-            stat("Data rate", format!("{:.2} Mbps", self.stats.mbps)),
-            stat("Skipped frames", self.stats.dropped.to_string())
+            summary,
+            widget::space().width(Length::Fill),
+            button(
+                text(if self.diagnostics_expanded {
+                    "Hide details"
+                } else {
+                    "Details"
+                })
+                .size(12)
+            )
+            .padding([5, 8])
+            .style(look::secondary)
+            .on_press(Message::Diagnostics),
+            button(text("Disconnect").size(12))
+                .padding([5, 8])
+                .style(look::secondary)
+                .on_press_maybe((!self.status.peer.is_empty()).then_some(Message::Disconnect))
         ]
-        .spacing(24);
-        let mut layout = column![heading, video, self.player_controls(false), rail]
-            .spacing(16)
-            .padding(24)
+        .spacing(10)
+        .align_y(iced::Alignment::Center)
+        .height(26);
+        column![stage, self.player_controls(false), rail]
+            .spacing(8)
+            .padding(12)
             .width(Length::Fill)
-            .height(Length::Fill);
-        if self.diagnostics_expanded {
-            let details: Element<'static, Message, Theme, Renderer> = if self.viewport.width >= 950.
-            {
-                row![
-                    detail_group("Video", self.stats.video.clone()),
-                    detail_group("Timing", self.stats.timing.clone()),
-                    detail_group("Audio", self.stats.audio.clone())
-                ]
-                .spacing(24)
-                .into()
-            } else {
-                column![
-                    detail_group("Video", self.stats.video.clone()),
-                    detail_group("Timing", self.stats.timing.clone()),
-                    detail_group("Audio", self.stats.audio.clone())
-                ]
-                .spacing(18)
-                .into()
-            };
-            layout=layout.push(container(scrollable(column![details,
-                text(self.stats.network.clone()).size(12).color(look::MUTED),
-                text("Frame rate counts new video submissions. Processing excludes sender, network transit and physical screen latency.")
-                    .size(12).color(look::MUTED)].spacing(18)).height(160)).padding(16).width(Length::Fill).style(look::panel));
-        }
-        layout.into()
+            .height(Length::Fill)
+            .into()
     }
     fn settings_view(&self) -> Element<'_, Message, Theme, Renderer> {
         fn field<'a>(
@@ -443,7 +443,7 @@ impl App {
         let available = if presentation {
             (self.viewport.width - 32.).min(960.) - 28.
         } else {
-            self.viewport.width - 48.
+            self.viewport.width - 24.
         };
         let style = if presentation {
             look::player
@@ -562,12 +562,9 @@ impl App {
             .center(Length::Fill)
             .into();
         }
-        let compact = self.diagnostics_expanded && self.viewport.height < 700.;
         let audio = !self.status.peer.is_empty() && self.status.kind == "Audio";
         let mut content = column![].spacing(14).align_x(iced::Alignment::Center);
-        if compact {
-            // Keep the empty-state instructions inside the smaller diagnostic viewport.
-        } else if let Some(cover) = &self.cover {
+        if let Some(cover) = &self.cover {
             content = content.push(widget::image(cover.clone()).width(150).height(150));
         } else {
             content = content.push(receiver_mark(96., look::SCREEN_MUTED));
@@ -579,7 +576,7 @@ impl App {
                 self.form.saved.name.clone()
             })
             .font(look::STRONG)
-            .size(if compact { 22 } else { 30 })
+            .size(30)
             .color(iced::Color::WHITE),
         );
         if audio {
@@ -595,7 +592,7 @@ impl App {
         } else {
             content=content.push(text(if self.status.peer.is_empty(){"Open Screen Mirroring on your iPhone or iPad.\nChoose this receiver from the list."}
                 else{"Connected. Waiting for your device to send video."}).size(14).color(look::SCREEN_MUTED).align_x(iced::alignment::Horizontal::Center));
-            if self.status.peer.is_empty() && !compact {
+            if self.status.peer.is_empty() {
                 content = content.push(
                     text("Use your Wi-Fi network or a Windows mobile hotspot.")
                         .size(12)
@@ -603,20 +600,8 @@ impl App {
                 );
             }
         }
-        container(content)
-            .center(Length::Fill)
-            .padding(if compact { 12 } else { 24 })
-            .into()
+        container(content).center(Length::Fill).padding(24).into()
     }
-}
-fn stat(label: &'static str, value: String) -> Element<'static, Message, Theme, Renderer> {
-    column![
-        text(label).size(12).color(look::MUTED),
-        text(value).size(16).font(look::STRONG)
-    ]
-    .spacing(4)
-    .width(Length::Fill)
-    .into()
 }
 fn section_title<'a>(
     title: &'static str,

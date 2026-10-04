@@ -31,6 +31,7 @@ path = "rust/examples/core_bench.rs"
 
 [dependencies]
 anyhow = "1"
+tokio = { version = "1", default-features = false, features = ["time"] }
 iced = { version = "=0.14.0", default-features = false, features = ["wgpu", "tiny-skia", "tokio", "image-without-codecs", "advanced", "lazy", "x11", "wayland"] }
 iced_wgpu = "=0.14.0"
 iced_renderer = { version = "=0.14.0", features = ["wgpu", "tiny-skia", "image"] }

@@ -251,6 +251,7 @@ enum Message {
     StartHidden(bool),
     Volume(f32),
     Devices(Result<Vec<crate::audio::DeviceChoice>, String>),
+    Capture(window::Id),
     Screenshot(window::Screenshot),
     #[cfg(windows)]
     Tray(crate::platform::tray::Command),
@@ -734,7 +735,12 @@ impl App {
                     && let Some(id) = self.window
                 {
                     self.last_capture = true;
-                    return window::screenshot(id).map(Message::Screenshot);
+                    // Let this tick's rebuilt layout reach the renderer first.
+                    // A same-update capture can consume the previous layer batch.
+                    return Task::future(async move {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        Message::Capture(id)
+                    });
                 }
                 if let Some(task) = self.reveal_video() {
                     return task;
@@ -1117,6 +1123,11 @@ impl App {
                 self.client.shared.ui.lock().unwrap().volume_db = db;
                 self.status.volume_db = db;
                 self.controls_used = Instant::now();
+            }
+            Message::Capture(id) => {
+                if self.window == Some(id) {
+                    return window::screenshot(id).map(Message::Screenshot);
+                }
             }
             Message::Screenshot(capture) => {
                 if let Some(path) = &self.args.screenshot
