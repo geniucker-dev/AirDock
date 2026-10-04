@@ -31,6 +31,21 @@ def set_run(value):
         else: winreg.SetValueEx(key, 'AirPlay-Windows', 0, value[1], value[0])
 
 
+def registered_uninstaller(install):
+    # A fast reinstall may allocate unins001 while a previous uninstaller's
+    # self-deletion helper still owns unins000. Follow the installed metadata.
+    key_name = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{5C60277C-4242-4C8E-A495-99D4E6D239B2}_is1'
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_name, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+            command = winreg.QueryValueEx(key, 'UninstallString')[0]
+    except FileNotFoundError:
+        return None
+    assert command.startswith('"'), 'Expected quoted installer uninstall path'
+    path = pathlib.Path(command.split('"', 2)[1]).resolve()
+    assert path.parent == install.resolve() and path.name.startswith('unins') and path.suffix == '.exe'
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--setup', type=pathlib.Path, required=True)
@@ -67,7 +82,7 @@ def main():
         report[stage] = {'payload_hashes_verified': len(manifest['files']), 'dll_audit': 'passed', 'user_data_preserved': True}
 
     def uninstall(stage):
-        subprocess.run([str(install/'unins000.exe'), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
+        subprocess.run([str(registered_uninstaller(install)), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
                         '/LOG='+str(output/(stage+'.log'))], check=True, timeout=180)
         deadline = time.monotonic()+30
         while (install/'airplay-windows.exe').exists() and time.monotonic()<deadline: time.sleep(.1)
@@ -105,8 +120,9 @@ def main():
         (output/'results.json').write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2))
     finally:
-        if (install/'unins000.exe').exists():
-            subprocess.run([str(install/'unins000.exe'), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'], check=False, timeout=180)
+        uninstaller = registered_uninstaller(install)
+        if uninstaller and uninstaller.exists():
+            subprocess.run([str(uninstaller), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'], check=False, timeout=180)
         set_run(original_run)
         for path, data in originals.items():
             if data is None: path.unlink(missing_ok=True)

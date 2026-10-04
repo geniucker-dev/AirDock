@@ -64,7 +64,7 @@ begin
       Previous.LoadFromFile(ExpandConstant('{app}\INSTALL_PAYLOAD.txt'));
       Next.LoadFromFile(ExpandConstant('{tmp}\next-payload.txt'));
       for I := 0 to Previous.Count - 1 do begin
-        Relative := Trim(Previous[I]);
+        Relative := Previous[I];
         if SafeRelativePath(Relative) and (Next.IndexOf(Relative) < 0) and
            FileExists(ExpandConstant('{app}\') + Relative) then
           if not DeleteFile(ExpandConstant('{app}\') + Relative) then
@@ -79,30 +79,20 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  Value, Exe, Candidate: String;
-  Quote: Integer;
+  Value, Exe: String;
 begin
   if CurUninstallStep <> usUninstall then Exit;
-  Log('Checking this installation autostart ownership.');
   if RegQueryStringValue(HKCU64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'AirPlay-Windows', Value) then begin
-    { Preserve Unicode registry text; generic script string conversions can use ANSI. }
+    { Compare Unicode text directly. Generic script Trim/Copy conversions can use ANSI. }
     Exe := ExpandConstant('{app}\airplay-windows.exe');
-    Log('Expected autostart executable: ' + Exe);
-    if Copy(Value, 1, 1) = '"' then begin
-      Candidate := Copy(Value, 2, Length(Value));
-      Quote := Pos('"', Candidate);
-      if Quote > 0 then
-        Log('Registered autostart executable: ' + Copy(Candidate, 1, Quote - 1));
-    end;
-    Log('Quoted executable prefix offset: ' + IntToStr(Pos('"' + Exe + '"', Value)));
-    if (CompareText(Value, Exe) = 0) or
-       (CompareText(Copy(Value, 1, Length(Exe) + 2), '"' + Exe + '"') = 0) or
-       (CompareText(Copy(Value, 1, Length(Exe) + 1), Exe + ' ') = 0) then begin
+    if (CompareText(Value, '"' + Exe + '" --start-hidden') = 0) or
+       (CompareText(Value, '"' + Exe + '"') = 0) or
+       (CompareText(Value, Exe + ' --start-hidden') = 0) or
+       (CompareText(Value, Exe) = 0) then begin
       if not RegDeleteValue(HKCU64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'AirPlay-Windows') then
         RaiseException('Cannot remove this installation autostart entry.');
-      Log('Removed the 64-bit autostart entry owned by this installation.');
+      Log('Removed the autostart entry owned by this installation.');
     end else
       Log('Preserved an autostart entry belonging to another installation.');
-  end else
-    Log('No autostart entry found.');
+  end;
 end;

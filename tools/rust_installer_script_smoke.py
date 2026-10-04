@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import winreg
-from rust_installer_verify import run_value, set_run
+from rust_installer_verify import run_value, set_run, registered_uninstaller
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -34,12 +34,13 @@ def main():
         install = base/'AirPlay 安装 fixture'
         def uninstall(stage):
             log = output/(stage+'.log')
-            subprocess.run([str(install/'unins000.exe'), '/VERYSILENT', '/SUPPRESSMSGBOXES',
+            subprocess.run([str(registered_uninstaller(install)), '/VERYSILENT', '/SUPPRESSMSGBOXES',
                             '/NORESTART', '/LOG='+str(log)], check=True)
             print(log.read_text(encoding='utf-8-sig'))
         try:
             for stage, value in [('own', '"'+str(install/'airplay-windows.exe')+'" --start-hidden'),
-                                 ('foreign', r'"C:\Portable Mirror\airplay-windows.exe" --start-hidden')]:
+                                 ('foreign', r'"C:\Portable Mirror\airplay-windows.exe" --start-hidden'),
+                                 ('foreign_unicode', '"'+str(base/'AirPlay 测试 fixture'/'airplay-windows.exe')+'" --start-hidden')]:
                 subprocess.run([str(base/'installer-script-fixture.exe'), '/VERYSILENT', '/SUPPRESSMSGBOXES',
                                 '/NORESTART', '/SP-', '/DIR='+str(install)], check=True)
                 set_run((value, winreg.REG_SZ))
@@ -48,8 +49,9 @@ def main():
                 assert run_value() == (None if stage == 'own' else (value, winreg.REG_SZ)), stage
             print('Installer callbacks: owned autostart removed; foreign autostart preserved.')
         finally:
-            if (install/'unins000.exe').exists():
-                subprocess.run([str(install/'unins000.exe'), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'], check=False)
+            uninstaller = registered_uninstaller(install)
+            if uninstaller and uninstaller.exists():
+                subprocess.run([str(uninstaller), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'], check=False)
             set_run(original)
 
 
