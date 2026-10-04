@@ -1,0 +1,25 @@
+{
+  "name": "airplay-windows-rust-native",
+  "version-string": "0.2.0",
+  "dependencies": [
+    {
+      "name": "ffmpeg",
+      "default-features": false,
+      "features": [
+        "avcodec",
+        "avformat",
+        "swresample",
+        "nvcodec"
+      ]
+    }
+  ],
+  "builtin-baseline": "9bdf622306cc71f2e605154578976af66c59af43",
+  "vcpkg-configuration": {
+    "overlay-ports": [
+      "native/ports"
+    ],
+    "overlay-triplets": [
+      "native/triplets"
+    ]
+  }
+}

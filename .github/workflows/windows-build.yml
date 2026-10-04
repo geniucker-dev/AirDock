@@ -1,0 +1,201 @@
+name: Rust Windows build and verification
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      PYTHONUTF8: '1'
+      AIRPLAY_AUDIO_NULL: '1'
+      VCPKGRS_DYNAMIC: '1'
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+      LIBCLANG_PATH: 'C:\Program Files\LLVM\bin'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Installer script callbacks preflight
+        shell: pwsh
+        run: |
+          $compiler = 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path $compiler)) {
+            choco install innosetup --version=6.4.3 --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          python tools/rust_installer_script_smoke.py --compiler "$compiler"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+          components: rustfmt, clippy
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: iced-wgpu-cpal-profiles-v1-${{ hashFiles('rust/vcpkg.json', 'rust/native/**') }}
+          env-vars: VCToolsVersion WindowsSDKVersion
+          cache-on-failure: true
+      - name: Read native dependency baseline
+        id: baseline
+        shell: pwsh
+        run: |
+          "sha=$((Get-Content rust/vcpkg.json | ConvertFrom-Json).'builtin-baseline')" >> $env:GITHUB_OUTPUT
+          "msvc=$env:VCToolsVersion" >> $env:GITHUB_OUTPUT
+          "sdk=$("$env:WindowsSDKVersion".TrimEnd([char]92))" >> $env:GITHUB_OUTPUT
+      - uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: ${{ steps.baseline.outputs.sha }}
+      - uses: actions/cache/restore@v4
+        id: native-cache
+        with:
+          path: ${{ env.VCPKG_ROOT }}/installed
+          key: lgpl-playback-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.baseline.outputs.sha }}-${{ steps.baseline.outputs.msvc }}-${{ steps.baseline.outputs.sdk }}-${{ hashFiles('rust/vcpkg.json', 'rust/native/**') }}
+      - name: Install pinned LGPL playback dependencies
+        env:
+          VCPKG_BINARY_SOURCES: clear
+        shell: pwsh
+        run: |
+          $nativeRoot = Join-Path $env:VCPKG_ROOT 'installed'
+          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet x64-windows "--x-manifest-root=$pwd/rust" "--x-install-root=$nativeRoot"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($relative in @('x64-windows/include/libavcodec/avcodec.h', 'x64-windows/share/ffmpeg/ffmpeg-source.zip')) {
+            if (-not (Test-Path (Join-Path $nativeRoot $relative))) { throw "Missing LGPL build material: $relative" }
+          }
+          New-Item -ItemType Directory -Force "$nativeRoot/vcpkg/updates" | Out-Null
+          "RUST_NATIVE_ROOT=$nativeRoot" >> $env:GITHUB_ENV
+          "FFMPEG_DIR=$nativeRoot/x64-windows" >> $env:GITHUB_ENV
+          "$nativeRoot/x64-windows/bin" >> $env:GITHUB_PATH
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install cryptography Pillow pefile
+      - name: Audit native DLLs before caching
+        run: python tools/rust_native_audit.py --root "$env:RUST_NATIVE_ROOT/x64-windows" --output rust-validation/native-build-audit.json
+      - uses: actions/cache/save@v4
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ env.VCPKG_ROOT }}/installed
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - name: Format and lint
+        run: |
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --all-targets -- -D warnings
+      - name: Debug and release regression
+        run: |
+          cargo test --locked --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --release --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --release --bins --examples
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "CACHE_ON_FAILURE=true" >> $env:GITHUB_ENV
+      - name: GPU shader readback oracle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force rust-validation | Out-Null
+          & target/release/examples/gpu_verify.exe | Tee-Object rust-validation/gpu-colour.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Protocol, reconnect and HLS playback
+        run: |
+          python tools/rust_integration.py --binary target/release/airplay-windows.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/rust_integration.py --hdr --binary target/release/airplay-windows.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/rust_reconnect_integration.py --binary target/release/airplay-windows.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/rust_hls_integration.py --binary target/release/airplay-windows.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/rust_hls_integration.py --fmp4 --binary target/release/airplay-windows.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/rust_hls_integration.py --fmp4 --hdr pq --binary target/release/airplay-windows.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/rust_hls_integration.py --fmp4 --hdr hlg --binary target/release/airplay-windows.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/rust_dependency_audit.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/rust_performance.py --output rust-validation/hardware-performance.json
+      - name: Crypto known-answer vectors
+        shell: pwsh
+        run: python tools/rust_crypto_vectors.py --rust target/release/examples/fairplay_vectors.exe
+      - name: Package exact runtime dependency closure and source materials
+        shell: pwsh
+        run: |
+          $crt = Get-ChildItem "$env:VCToolsRedistDir/x64/Microsoft.VC*.CRT" -Directory | Select-Object -First 1
+          if (-not $crt) { throw 'CRT directory missing' }
+          python tools/rust_package.py --binary target/release/airplay-windows.exe --native "$env:RUST_NATIVE_ROOT/x64-windows/bin" --crt "$($crt.FullName)" --destination dist-rust
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item LICENSE,LICENSES.md,README.md,CREDITS.md,THIRD_PARTY_NOTICES.md,Cargo.lock dist-rust/
+          Copy-Item -Recurse licenses dist-rust/
+          Copy-Item rust/assets/fonts/OFL.txt dist-rust/MANROPE_LICENSE.txt
+          Copy-Item rust/assets/fonts/NOTO-OFL.txt dist-rust/NOTO_LICENSE.txt
+          New-Item -ItemType Directory -Force dist-rust/docs,dist-rust/sources | Out-Null
+          Copy-Item docs/RUST*.md dist-rust/docs/
+          Copy-Item rust/src/playfair_data/AIRFRY-LICENSE.txt dist-rust/
+          Copy-Item tools/installer/INNO-LICENSE.txt dist-rust/INSTALLER_LICENSE.txt
+          Copy-Item -Recurse "$env:RUST_NATIVE_ROOT/x64-windows/share" dist-rust/native-licenses
+          Copy-Item "$env:RUST_NATIVE_ROOT/x64-windows/share/ffmpeg/ffmpeg-source.zip" dist-rust/sources/
+          Copy-Item -Recurse rust/native/ports dist-rust/sources/native-build
+          Copy-Item -Recurse rust/native/triplets dist-rust/sources/native-triplets
+          Copy-Item rust/vcpkg.json,rust-toolchain.toml dist-rust/sources/
+          git archive --format=zip --output=dist-rust/sources/airplay-windows-source.zip HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/rust_dependency_licenses.py --output dist-rust/rust-licenses
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Content dist-rust/ACCEPTANCE_STATUS.txt 'AirPlay-Windows. See NATIVE_AUDIT.json and docs/RUST_VALIDATION.md. Physical Windows/iPhone playback, power and physical performance acceptance remain pending.'
+      - name: Audit actual bundled DLLs and play using only packaged dependencies
+        shell: pwsh
+        run: |
+          python tools/rust_package.py --audit-only --destination dist-rust
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PATH = "$pwd/dist-rust;$env:SystemRoot/System32;$env:SystemRoot"
+          & "$env:pythonLocation/python.exe" tools/rust_reconnect_integration.py --binary dist-rust/airplay-windows.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:pythonLocation/python.exe" tools/rust_integration.py --hdr --binary dist-rust/airplay-windows.exe --media-verifier target/release/examples/media_verify.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:pythonLocation/python.exe" tools/rust_hls_integration.py --fmp4 --binary dist-rust/airplay-windows.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:pythonLocation/python.exe" tools/rust_hls_integration.py --fmp4 --hdr pq --binary dist-rust/airplay-windows.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:pythonLocation/python.exe" tools/rust_hls_integration.py --fmp4 --hdr hlg --binary dist-rust/airplay-windows.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build portable archive and user-level installer from audited payload
+        shell: pwsh
+        run: |
+          $compiler = 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path $compiler)) {
+            choco install innosetup --version=6.4.3 --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          if (-not (Test-Path $compiler)) { throw 'Inno Setup compiler unavailable' }
+          python tools/rust_distributions.py --package dist-rust --output dist-release --compiler "$compiler" --commit "$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify installation upgrade playback and uninstall
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist-release/*-setup.exe
+          if (@($setup).Count -ne 1) { throw 'Expected exactly one installer' }
+          python tools/rust_installer_verify.py --setup "$($setup.FullName)" --package dist-rust --output rust-validation/installer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: airplay-windows-rust-x64-${{ github.sha }}
+          path: dist-rust/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: airplay-windows-rust-distributions-x64-${{ github.sha }}
+          path: dist-release/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rust-windows-validation-${{ github.sha }}
+          path: rust-validation/
+          if-no-files-found: ignore

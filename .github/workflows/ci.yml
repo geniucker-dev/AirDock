@@ -1,0 +1,79 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows:
+    uses: ./.github/workflows/windows-build.yml
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      AIRPLAY_AUDIO_NULL: '1'
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native development and software GPU dependencies
+        run: sudo apt-get update && sudo apt-get install -y libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libasound2-dev libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-0 libvulkan1 mesa-vulkan-drivers clang libclang-dev pkg-config xvfb xauth xdotool openbox
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: iced-wgpu-cpal-v1
+          cache-on-failure: true
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --all-targets
+      - run: cargo build --locked --bins --examples
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install cryptography Pillow
+      - name: Shader oracle
+        run: |
+          mkdir -p rust-validation
+          target/debug/examples/gpu_verify | tee rust-validation/gpu-colour.json
+      - run: python tools/rust_dependency_audit.py
+      - run: python tools/rust_performance.py --output rust-validation/hardware-performance.json
+      - run: python tools/rust_integration.py --binary target/debug/airplay-windows
+      - run: python tools/rust_integration.py --hdr --binary target/debug/airplay-windows
+      - run: python tools/rust_shutdown_integration.py --binary target/debug/airplay-windows
+      - run: python tools/rust_reconnect_integration.py --binary target/debug/airplay-windows
+      - run: python tools/rust_hls_integration.py --binary target/debug/airplay-windows
+      - run: python tools/rust_hls_integration.py --fmp4 --binary target/debug/airplay-windows
+      - name: CPAL device actor and 44.1 to 48 kHz resampling on virtual ALSA
+        run: |
+          echo 'pcm.!default { type null hint.description "CI virtual null PCM" }' > "$RUNNER_TEMP/airplay-asound.conf"
+          ALSA_CONFIG_PATH="$RUNNER_TEMP/airplay-asound.conf" python tools/rust_hls_integration.py --device-backend --binary target/debug/airplay-windows
+      - name: Crypto known-answer vectors
+        run: python tools/rust_crypto_vectors.py --rust target/debug/examples/fairplay_vectors
+      - name: Iced pages, fullscreen, restoration and encrypted video
+        run: |
+          xvfb-run -a python tools/rust_activity_integration.py --binary target/debug/airplay-windows
+          xvfb-run -a python tools/rust_ui_smoke.py --binary target/debug/airplay-windows
+          xvfb-run -a python tools/rust_player_integration.py --binary target/debug/airplay-windows
+          xvfb-run -a python tools/rust_preferences_ui.py --binary target/debug/airplay-windows
+          xvfb-run -a python tools/rust_locale_ui.py --binary target/debug/airplay-windows
+          xvfb-run -a python tools/rust_integration.py --gui --binary target/debug/airplay-windows
+          xvfb-run -a python tools/rust_integration.py --hdr --gui --binary target/debug/airplay-windows
+          xvfb-run -a python tools/rust_hls_integration.py --fmp4 --hdr pq --gui --binary target/debug/airplay-windows
+          xvfb-run -a python tools/rust_hls_integration.py --fmp4 --hdr hlg --gui --binary target/debug/airplay-windows
+          xvfb-run -a python tools/rust_reconnect_integration.py --gui --binary target/debug/airplay-windows
+          AIRPLAY_GPU_TEST_LOSS_AFTER_MS=1500 xvfb-run -a python tools/rust_integration.py --gui --binary target/debug/airplay-windows
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rust-linux-validation-${{ github.sha }}
+          path: rust-validation/
+          if-no-files-found: error
