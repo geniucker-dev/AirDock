@@ -57,7 +57,9 @@ def build(package, output, compiler, commit):
     (package/'PACKAGE_SHA256.json').write_text(json.dumps({'commit': commit, 'version': version, 'files': hashes}, indent=2))
     prefix = f'airplay-windows-{version}-{commit[:7]}-windows-x64'
     portable = output/(prefix+'-portable.zip')
-    with zipfile.ZipFile(portable, 'w', zipfile.ZIP_DEFLATED) as archive:
+    # Reproducible native/source caches may carry epoch mtimes. ZIP clamps
+    # unsupported metadata dates; payload bytes and hashes remain unchanged.
+    with zipfile.ZipFile(portable, 'w', zipfile.ZIP_DEFLATED, strict_timestamps=False) as archive:
         for path in payload_files(package):
             archive.write(path, path.relative_to(package).as_posix())
     with zipfile.ZipFile(portable) as archive:
