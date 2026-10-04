@@ -85,7 +85,7 @@ begin
   if CurUninstallStep <> usUninstall then Exit;
   Log('Checking this installation autostart ownership.');
   if RegQueryStringValue(HKCU64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'AirPlay-Windows', Value) then begin
-    Value := Trim(Value);
+    { Preserve Unicode registry text; generic script string conversions can use ANSI. }
     Exe := ExpandConstant('{app}\airplay-windows.exe');
     Log('Expected autostart executable: ' + Exe);
     if Copy(Value, 1, 1) = '"' then begin
