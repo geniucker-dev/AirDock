@@ -29,6 +29,7 @@ def main():
     captures = {}
     for page, y in [('receiver', None), ('settings', 215), ('diagnostics', 260),
                     ('focus', None), ('fullscreen', None), ('restore', None),
+                    ('fullscreen-settings', 215), ('restore-settings', 215),
                     ('edit-settings', 215), ('resize', None)]:
         directory = output / page
         directory.mkdir(exist_ok=True)
@@ -61,6 +62,11 @@ def main():
                     xdo('click', 1)
                 if page in ['focus', 'fullscreen']:
                     xdo('key', 'ctrl+h' if page == 'focus' else 'F11')
+                if page in ['fullscreen-settings', 'restore-settings']:
+                    xdo('key', 'F11')
+                    if page == 'restore-settings':
+                        time.sleep(.2)
+                        xdo('key', 'Escape')
                 if page == 'restore':
                     for key in ['ctrl+h', 'F11', 'Escape', 'ctrl+h']:
                         xdo('key', key)
@@ -88,6 +94,11 @@ def main():
         with Image.open(capture) as image:
             width, height = image.size
             viewport = image.crop((210, 75, min(width, 1095), min(height, 680))).convert('RGBA').tobytes()
+            if page in ['fullscreen', 'fullscreen-settings']:
+                # The screen edges belong to the player, with no navigation,
+                # title, footer or outer padding even when entering from settings.
+                for region in [(0, 0, 180, 180), (0, height-70, width, height)]:
+                    assert max(ImageStat.Stat(image.crop(region).convert('RGB')).mean) < .1, page
         captures[page] = {'width': width, 'height': height, 'sha256': hashlib.sha256(png).hexdigest(),
                           'viewport_sha256': hashlib.sha256(viewport).hexdigest()}
         if page == 'edit-settings':
@@ -97,6 +108,7 @@ def main():
         else:
             assert settings.read_bytes() == original, 'Reading legacy config modified the user file'
     assert captures['fullscreen']['width'] > captures['receiver']['width']
+    assert captures['fullscreen-settings']['width'] == captures['fullscreen']['width']
     assert captures['resize']['width'] == 960
     assert len({captures[p]['viewport_sha256'] for p in ['receiver', 'settings', 'diagnostics', 'focus']}) == 4
     assert (captures['restore']['width'], captures['restore']['height']) == (captures['receiver']['width'], captures['receiver']['height'])
@@ -107,6 +119,11 @@ def main():
         mean_error = max(ImageStat.Stat(difference).mean)
     assert mean_error < 1.0, f'Restored scene differs: mean RGB error {mean_error}/255'
     captures['restore']['mean_error_255'] = mean_error
+    with Image.open(output/'settings.png') as before, Image.open(output/'restore-settings.png') as after:
+        assert before.size == after.size
+        mean_error = max(ImageStat.Stat(ImageChops.difference(before.convert('RGB'), after.convert('RGB'))).mean)
+        assert mean_error < 1.0, f'Settings page not restored: {mean_error}/255'
+    captures['restore-settings']['mean_error_255'] = mean_error
     result = {'pages_and_restore': captures, 'windows_tray_dpi_hardware_acceptance': 'pending'}
     (output / 'results.json').write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))

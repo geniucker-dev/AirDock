@@ -75,9 +75,9 @@ def main():
                     process.wait()
         record = json.loads(metrics.read_text())
         assert record['decoded_frames'] == 30, record
-        if state in ('settings', 'closed', 'software'):
+        if state in ('settings', 'software'):
             assert record['uploaded_frames'] == 0 and record['presented_frames'] == 0, record
-        else:
+        else: # A new video session restores a hidden/minimized player.
             assert record['uploaded_frames'] >= 10 and record['presented_frames'] >= 10, record
         if state == 'software':
             assert 'Video unavailable: no compatible GPU' in (directory / 'receiver.log').read_text()

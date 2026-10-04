@@ -141,14 +141,18 @@ pub struct DisplayMailbox {
 }
 impl DisplayMailbox {
     fn publish(&self, frame: VideoFrame, metrics: &Metrics) {
-        if let Some(old) = self.latest.lock().unwrap().replace(Arc::new(frame))
+        let old = self.latest.lock().unwrap().replace(Arc::new(frame));
+        let first = old.is_none();
+        if let Some(old) = old
             && old.sequence > self.consumed.load(Ordering::Acquire)
         {
             metrics.replaced.fetch_add(1, Ordering::Relaxed);
         }
         self.revision.fetch_add(1, Ordering::Release);
         self.ready.notify_all();
-        if self.visible.load(Ordering::Relaxed)
+        // Notify a hidden desktop once when video starts, so a new session can
+        // reveal its player promptly. Continuing hidden frames never wake it.
+        if (first || self.visible.load(Ordering::Relaxed))
             && let Some(wake) = self.wake.lock().unwrap().as_mut()
         {
             let _ = wake.try_send(());
@@ -375,6 +379,35 @@ impl Drop for Playback {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hidden_mailbox_wakes_only_for_the_first_frame_or_reset() {
+        use futures::{FutureExt, StreamExt};
+        let mailbox = DisplayMailbox::default();
+        let metrics = Metrics::default();
+        let (sender, mut receiver) = futures::channel::mpsc::channel(1);
+        *mailbox.wake.lock().unwrap() = Some(sender);
+        let frame = |sequence| VideoFrame {
+            frame: ffmpeg_next::frame::Video::new(ffmpeg_next::format::Pixel::YUV420P, 16, 16),
+            received: Instant::now(),
+            pts: None,
+            epoch: 1,
+            sequence,
+            hls: false,
+        };
+        mailbox.publish(frame(1), &metrics);
+        assert_eq!(receiver.next().now_or_never(), Some(Some(())));
+        for sequence in 2..=120 {
+            mailbox.publish(frame(sequence), &metrics);
+        }
+        assert!(receiver.next().now_or_never().is_none());
+        mailbox.clear();
+        assert_eq!(receiver.next().now_or_never(), Some(Some(())));
+        mailbox.publish(frame(121), &metrics);
+        assert_eq!(receiver.next().now_or_never(), Some(Some(())));
+        mailbox.visible.store(true, Ordering::Release);
+        mailbox.publish(frame(122), &metrics);
+        assert_eq!(receiver.next().now_or_never(), Some(Some(())));
+    }
     #[test]
     fn future_word_frames_keep_bounded_intake_and_shutdown_unblocks_producer() {
         let p = Arc::new(Playback::new(

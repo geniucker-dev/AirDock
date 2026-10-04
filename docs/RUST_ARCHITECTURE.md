@@ -117,9 +117,16 @@ with a clear video-support message; software UI does not secretly render the YUV
 primitive. Driver failures and cross-adapter cost still require physical Windows
 validation.
 
-Minimized/hidden windows suppress media/UI frame notifications and video uploads.
+Minimized/hidden windows suppress continuing media/UI frame notifications and video uploads.
+The first scheduled video after an empty mailbox sends one notification so a new
+receiving session can reveal its player promptly. The reveal latch uses the
+network session ID, not the media generation: manual hiding, FLUSH, seek and
+format switches cannot repeatedly steal focus. Audio-only sessions never reveal.
 One latest CPU frame is retained for restoration. Settings/platform status updates
 are coalesced; the daemon's low-frequency housekeeping is not an animation loop.
+Fullscreen removes navigation, title and control rows and uses the same video
+Primitive over the entire surface. Errors appear as an overlay. Exiting returns
+to the page from which fullscreen was entered; aspect ratio/crop remain explicit.
 
 ## Scope and licensing
 

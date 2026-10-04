@@ -193,7 +193,7 @@ enum Message {
     Tick,
     Opened,
     Window(window::Id, window::Event),
-    Minimized(bool),
+    Minimized(window::Id, bool),
     Page(u8),
     Fullscreen,
     Crop,
@@ -282,6 +282,28 @@ fn tray_events(events: &TrayEvents) -> impl futures::Stream<Item = Message> + us
         .expect("tray events start once")
         .map(Message::Tray)
 }
+/// One reveal per receiving session, not per media generation (FLUSH/seek).
+#[derive(Default)]
+struct ConnectionReveal {
+    seen: Option<u64>,
+}
+impl ConnectionReveal {
+    fn video(&mut self, session: Option<u64>, has_frame: bool, hidden: bool) -> bool {
+        let Some(session) = session.filter(|_| has_frame) else {
+            return false;
+        };
+        if self.seen == Some(session) {
+            return false;
+        }
+        self.seen = Some(session);
+        hidden
+    }
+    fn dismiss(&mut self, session: Option<u64>) {
+        if session.is_some() {
+            self.seen = session;
+        }
+    }
+}
 struct App {
     client: Client,
     settings: Settings,
@@ -294,9 +316,11 @@ struct App {
     window: Option<window::Id>,
     page: u8,
     fullscreen: bool,
+    fullscreen_return_page: Option<u8>,
     crop: bool,
     focus: bool,
     minimized: bool,
+    connection_reveal: ConnectionReveal,
     gpu_warning: bool,
     width: String,
     height: String,
@@ -339,9 +363,11 @@ impl App {
             window: None,
             page: 0,
             fullscreen: settings.fullscreen,
+            fullscreen_return_page: None,
             crop: false,
             focus: settings.hide_ui,
             minimized: false,
+            connection_reveal: ConnectionReveal::default(),
             gpu_warning: false,
             width: settings.mirror_width.to_string(),
             height: settings.mirror_height.to_string(),
@@ -489,9 +515,42 @@ impl App {
                 .then(|| widget::image::Handle::from_bytes((*self.cover_source).clone()));
         }
     }
+    fn active_session(&self) -> Option<u64> {
+        self.client
+            .shared
+            .sessions
+            .owner
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|s| s.id)
+    }
+    fn active_video_session(&self) -> Option<u64> {
+        let owner = self.client.shared.sessions.owner.lock().unwrap();
+        self.frame
+            .as_ref()
+            .filter(|f| f.epoch == self.client.shared.generation())
+            .and_then(|_| owner.as_ref().map(|s| s.id))
+    }
+    fn reveal_video(&mut self) -> Option<Task<Message>> {
+        if self.connection_reveal.video(
+            self.active_video_session(),
+            self.frame.is_some(),
+            self.window.is_none() || self.minimized,
+        ) {
+            self.page = 0;
+            return Some(self.open_window());
+        }
+        None
+    }
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Opened | Message::Frame | Message::Status => self.refresh(),
+            Message::Opened | Message::Frame | Message::Status => {
+                self.refresh();
+                if let Some(task) = self.reveal_video() {
+                    return task;
+                }
+            }
             Message::Tick => {
                 if crate::platform::exit_requested()
                     || !self.client.shared.running.load(Ordering::Acquire)
@@ -556,12 +615,20 @@ impl App {
                         return window::screenshot(id).map(Message::Screenshot);
                     }
                 }
+                if let Some(task) = self.reveal_video() {
+                    return task;
+                }
                 if let Some(id) = self.window {
                     return window::is_minimized(id)
-                        .map(|v| Message::Minimized(v.unwrap_or(false)));
+                        .map(move |v| Message::Minimized(id, v.unwrap_or(false)));
                 }
             }
             Message::Window(id, window::Event::CloseRequested) => {
+                if self.window != Some(id) {
+                    return Task::none();
+                }
+                let session = self.active_session();
+                self.connection_reveal.dismiss(session);
                 self.client
                     .shared
                     .media
@@ -580,15 +647,22 @@ impl App {
                     return window::minimize(id, true);
                 }
             }
-            Message::Window(_, window::Event::Resized(size)) => {
-                if !self.fullscreen {
+            Message::Window(id, window::Event::Resized(size)) => {
+                if self.window == Some(id) && !self.fullscreen {
                     self.settings.window_width = size.width as u32;
                     self.settings.window_height = size.height as u32;
                 }
             }
             Message::Window(_, _) => {}
-            Message::Minimized(minimized) => {
+            Message::Minimized(id, minimized) => {
+                if self.window != Some(id) {
+                    return Task::none();
+                }
                 if self.minimized != minimized {
+                    if minimized {
+                        let session = self.active_session();
+                        self.connection_reveal.dismiss(session);
+                    }
                     self.client
                         .shared
                         .metrics
@@ -635,6 +709,22 @@ impl App {
             Message::Fullscreen => {
                 self.fullscreen = !self.fullscreen;
                 self.settings.fullscreen = self.fullscreen;
+                if self.fullscreen {
+                    self.fullscreen_return_page = Some(self.page);
+                    self.page = 0;
+                } else if let Some(page) = self.fullscreen_return_page.take() {
+                    self.page = page;
+                }
+                self.client.shared.media.display.visible.store(
+                    self.page == 0 && self.window.is_some() && !self.minimized && !self.gpu_warning,
+                    Ordering::Release,
+                );
+                self.client
+                    .shared
+                    .metrics
+                    .last_submission_us
+                    .store(0, Ordering::Relaxed);
+                self.refresh();
                 if let Some(id) = self.window {
                     return window::set_mode(
                         id,
@@ -661,6 +751,8 @@ impl App {
             }
             Message::Hide => {
                 if self.tray_available() {
+                    let session = self.active_session();
+                    self.connection_reveal.dismiss(session);
                     self.client
                         .shared
                         .media
@@ -762,6 +854,33 @@ impl App {
         Task::none()
     }
     fn view(&self, _: window::Id) -> Element<'_, Message, Theme, Renderer> {
+        // Fullscreen is a presentation mode, never a fullscreen settings shell.
+        // Error feedback overlays the video instead of bringing back the sidebar.
+        if self.fullscreen || (self.focus && self.page == 0 && self.status.error.is_empty()) {
+            let player = container(self.video_view())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(iced::Color::BLACK.into()),
+                    ..Default::default()
+                });
+            if self.status.error.is_empty() {
+                return player.into();
+            }
+            return widget::stack![
+                player,
+                container(
+                    row![
+                        text(&self.status.error).size(13),
+                        button("Dismiss").on_press(Message::ClearError)
+                    ]
+                    .spacing(12)
+                )
+                .padding(12)
+                .style(container::rounded_box)
+            ]
+            .into();
+        }
         let navigation = column![
             text("AIRPLAY").size(13),
             text("Windows").size(25),
@@ -803,16 +922,7 @@ impl App {
             1=>scrollable(column![text("Receiver settings").size(28),text("Network and decoder settings apply to the next connection. GPU selection applies on restart. Audio output changes immediately.").size(13),text_input("Receiver name",&self.settings.name).on_input(Message::Name),row![text_input("Width",&self.width).on_input(Message::Width),text_input("Height",&self.height).on_input(Message::Height),text_input("FPS",&self.fps).on_input(Message::Fps)].spacing(10),checkbox(self.settings.hardware_decode).label("Hardware decoding").on_toggle(Message::Hardware),checkbox(self.settings.hevc_enabled).label("Advertise HEVC").on_toggle(Message::Hevc),checkbox(self.settings.vsync).label("VSync (restart)").on_toggle(Message::Vsync),checkbox(self.settings.hls_enabled).label("HLS / FCUP playback").on_toggle(Message::Hls),text("Render adapter preference"),pick_list(vec!["balanced".to_string(),"low-power".into(),"high-performance".into()],Some(self.settings.gpu_preference.clone()),Message::Gpu),text("Audio output"),pick_list(self.devices.clone(),self.devices.iter().find(|d|d.id==self.settings.audio_device).cloned(),Message::Audio),checkbox(self.settings.minimize_to_tray).label("Minimize to tray").on_toggle(Message::MinimizeTray),checkbox(self.settings.start_hidden).label("Start in tray").on_toggle(Message::StartHidden),checkbox(self.settings.autostart).label("Start with Windows").on_toggle(Message::Autostart),row![button("Save settings").on_press(Message::Save),button("Reset form").on_press(Message::Reset)].spacing(12)].spacing(16).padding(28)).into(),
             2=>column![text("Diagnostics").size(28),text(&self.metrics_text),text(format!("Source: {}\nCodec: {}\nDecoder: {}\nDimensions: {}\nAudio: {}",self.status.peer,self.status.codec,self.status.decoder,self.status.dimensions,self.status.audio_status)),text(self.client.shared.metrics.video_colour_label()),text(&self.status.addresses).size(13),text("Iced + wgpu · cpal / WASAPI · FFmpeg LGPL DLL profile"),text("Counters describe new GPU submissions, not measured screen scanout. Hardware performance and end-to-end AV latency require Windows/iPhone acceptance measurements.").size(13),text(format!("Version {}",env!("CARGO_PKG_VERSION")))].spacing(22).padding(28).into(),
             _=>{
-                let video:Element<'_,Message,Theme,Renderer>=if let Some(frame)=&self.frame {
-                    if render::compositor::STATUS.load(Ordering::Acquire)==3{container(text("Video requires a compatible GPU").size(22)).center(Length::Fill).into()}
-                    else{widget::shader(render::Video{frame:frame.clone(),shared:self.client.shared.clone(),crop:self.crop}).width(Length::Fill).height(Length::Fill).into()}
-                }else{
-                    let title=if self.status.peer.is_empty(){"Ready to receive"}else if self.status.kind=="Audio"{"Audio playback"}else{"Waiting for video"};
-                    let mut ready=column![text(title).size(29),text(&self.settings.name).size(20),text(if self.status.peer.is_empty(){"Open Screen Mirroring on your iPhone or iPad.\nConnect through your LAN or Windows mobile hotspot."}else{&self.status.title}).size(14)].spacing(16).align_x(iced::Alignment::Center);
-                    if let Some(cover)=&self.cover{ready=ready.push(widget::image(cover.clone()).width(180).height(180));}
-                    if !self.status.artist.is_empty(){ready=ready.push(text(&self.status.artist));}
-                    container(ready).center(Length::Fill).into()
-                };
+                let video = self.video_view();
                 column![row![text(if self.status.device.is_empty(){"Your screen, here"}else{&self.status.device}).size(24),widget::space().width(Length::Fill),button("Disconnect").on_press_maybe((!self.status.peer.is_empty()).then_some(Message::Disconnect))].spacing(12),container(video).width(Length::Fill).height(Length::Fill).style(|_|container::Style{background:Some(iced::Color::from_rgb8(9,12,20).into()),border:iced::Border{radius:12.into(),..Default::default()},..Default::default()}),row![button("Fullscreen · F11").style(button::secondary).on_press(Message::Fullscreen),button(if self.crop{"Fit"}else{"Fill / crop"}).style(button::secondary).on_press(Message::Crop),widget::space().width(Length::Fill),text(self.client.shared.metrics.video_colour_label()).size(12),text("Volume"),slider(-60.0..=0.,self.status.volume_db,Message::Volume).width(140)].spacing(14).align_y(iced::Alignment::Center)].spacing(20).padding(24).into()
             }
         };
@@ -830,31 +940,6 @@ impl App {
                 .style(container::rounded_box),
             );
         }
-        if self.focus
-            && self.status.error.is_empty()
-            && self.page == 0
-            && matches!(render::compositor::STATUS.load(Ordering::Acquire), 1 | 2)
-        {
-            return container(if let Some(frame) = &self.frame {
-                Element::from(
-                    widget::shader(render::Video {
-                        frame: frame.clone(),
-                        shared: self.client.shared.clone(),
-                        crop: self.crop,
-                    })
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-                )
-            } else {
-                Element::from(
-                    container(text("Waiting for video · Ctrl+H to show controls"))
-                        .center(Length::Fill),
-                )
-            })
-            .height(Length::Fill)
-            .width(Length::Fill)
-            .into();
-        }
         container(
             row![navigation, body]
                 .height(Length::Fill)
@@ -862,6 +947,51 @@ impl App {
         )
         .height(Length::Fill)
         .into()
+    }
+    fn video_view(&self) -> Element<'_, Message, Theme, Renderer> {
+        if let Some(frame) = &self.frame {
+            if render::compositor::STATUS.load(Ordering::Acquire) == 3 {
+                return container(text("Video requires a compatible GPU").size(22))
+                    .center(Length::Fill)
+                    .into();
+            }
+            return widget::shader(render::Video {
+                frame: frame.clone(),
+                shared: self.client.shared.clone(),
+                crop: self.crop,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+        }
+        if self.fullscreen || (self.focus && self.page == 0) {
+            return container(text(if self.fullscreen {
+                "Waiting for video · Esc or F11 to leave fullscreen"
+            } else {
+                "Waiting for video · Ctrl+H to show controls"
+            }))
+            .center(Length::Fill)
+            .into();
+        }
+        let title = if self.status.peer.is_empty() {
+            "Ready to receive"
+        } else if self.status.kind == "Audio" {
+            "Audio playback"
+        } else {
+            "Waiting for video"
+        };
+        let mut ready = column![text(title).size(29), text(&self.settings.name).size(20),
+            text(if self.status.peer.is_empty() {
+                "Open Screen Mirroring on your iPhone or iPad.\nConnect through your LAN or Windows mobile hotspot."
+            } else { &self.status.title }).size(14)]
+            .spacing(16).align_x(iced::Alignment::Center);
+        if let Some(cover) = &self.cover {
+            ready = ready.push(widget::image(cover.clone()).width(180).height(180));
+        }
+        if !self.status.artist.is_empty() {
+            ready = ready.push(text(&self.status.artist));
+        }
+        container(ready).center(Length::Fill).into()
     }
 }
 
@@ -882,4 +1012,31 @@ fn desktop_theme() -> Theme {
             )
         })
         .clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConnectionReveal;
+
+    #[test]
+    fn hidden_video_reveals_once_and_audio_or_flush_do_not_reopen() {
+        let mut reveal = ConnectionReveal::default();
+        assert!(!reveal.video(None, false, true));
+        assert!(!reveal.video(Some(1), false, true)); // Audio/handshake only.
+        assert!(reveal.video(Some(1), true, true));
+        assert!(!reveal.video(Some(1), true, true)); // Later frame or FLUSH.
+        assert!(reveal.video(Some(2), true, true)); // Same peer, new session.
+        assert!(!reveal.video(Some(3), true, false)); // Already showing.
+        assert!(!reveal.video(Some(3), true, true)); // Subsequently hidden.
+    }
+
+    #[test]
+    fn explicit_hide_suppresses_an_active_session_even_before_first_frame() {
+        let mut reveal = ConnectionReveal::default();
+        reveal.dismiss(None);
+        assert!(reveal.video(Some(1), true, true));
+        reveal.dismiss(Some(2));
+        assert!(!reveal.video(Some(2), true, true));
+        assert!(reveal.video(Some(3), true, true));
+    }
 }
