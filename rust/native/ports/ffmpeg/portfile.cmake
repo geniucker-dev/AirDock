@@ -737,7 +737,7 @@ endif()
 if("gpl" IN_LIST FEATURES OR "nonfree" IN_LIST FEATURES)
     message(FATAL_ERROR "AirPlay DLLs must use the LGPL playback-only profile")
 endif()
-string(APPEND OPTIONS " --disable-encoders --disable-muxers --disable-nvenc --disable-postproc")
+string(APPEND OPTIONS " --disable-encoders --disable-muxers --disable-nvenc")
 message(STATUS "Building Options: ${OPTIONS}")
 
 # Release build

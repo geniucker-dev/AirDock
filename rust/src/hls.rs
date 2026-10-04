@@ -907,8 +907,13 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
                     inner.session.lock().unwrap().1.position =
                         pts.micros().max(0) as f64 / 1_000_000.;
                 }
-                inner.shared.ui.lock().unwrap().dimensions =
-                    format!("{} × {}", frame.width(), frame.height());
+                {
+                    let dimensions = format!("{} × {}", frame.width(), frame.height());
+                    let mut ui = inner.shared.ui.lock().unwrap();
+                    if ui.dimensions != dimensions {
+                        ui.dimensions = dimensions;
+                    }
+                }
                 unsafe {
                     if (*frame.as_ptr()).color_range
                         == ffmpeg::ffi::AVColorRange::AVCOL_RANGE_UNSPECIFIED

@@ -202,12 +202,17 @@ pub fn mirror(
                                                 for frame in frames {
                                                     {
                                                         let mut ui = state.ui.lock().unwrap();
-                                                        ui.dimensions = format!(
+                                                        let dimensions = format!(
                                                             "{} × {}",
                                                             frame.width(),
                                                             frame.height()
                                                         );
-                                                        ui.decoder = d.backend().into();
+                                                        if ui.dimensions != dimensions {
+                                                            ui.dimensions = dimensions;
+                                                        }
+                                                        if ui.decoder != d.backend() {
+                                                            ui.decoder = d.backend().into();
+                                                        }
                                                     }
                                                     let pts=frame.timestamp().map(crate::playback::MediaTime::microseconds).or(source_pts);
                                                     state.publish(VideoFrame {

@@ -2,7 +2,7 @@ use crate::{
     config::Settings,
     crypto,
     discovery::Discovery,
-    integration,
+    platform,
     server::{Device, Server},
     state::Shared,
 };
@@ -57,7 +57,7 @@ impl Runtime {
                         Ok(Command::Settings(settings)) => {
                             let result = (|| -> Result<()> {
                                 settings.save(&directory.join("settings.json"))?;
-                                integration::autostart(settings.autostart)?;
+                                platform::autostart(settings.autostart)?;
                                 *state.settings.write().unwrap() = settings;
                                 drop(discovery.take());
                                 discovery = Some(Discovery::start(server.device())?);
@@ -78,7 +78,7 @@ impl Runtime {
                             .collect::<Vec<_>>()
                             .join(" · ");
                         let mut status = state.ui.lock().unwrap();
-                        status.usb = integration::usb_present();
+                        status.usb = platform::usb_present();
                         status.addresses = addresses;
                         last_devices = std::time::Instant::now();
                     }

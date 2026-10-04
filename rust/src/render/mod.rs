@@ -64,6 +64,7 @@ pub struct VideoPipeline {
     format: wgpu::TextureFormat,
     key: Option<(u32, u32, Layout)>,
     last: Option<(u64, u64)>,
+    rejected: Option<(u64, u64)>,
     area: [f32; 4],
     scratch: [Vec<u8>; 3],
     valid: bool,
@@ -160,6 +161,7 @@ impl Pipeline for VideoPipeline {
             format,
             key: None,
             last: None,
+            rejected: None,
             area: [0.; 4],
             scratch: Default::default(),
             valid: false,
@@ -358,10 +360,15 @@ impl Primitive for VideoPrimitive {
         };
         p.area = area.map(|v| v * scale);
         let key = (self.frame.epoch, self.frame.sequence);
+        if p.rejected == Some(key) {
+            p.valid = false;
+            return;
+        }
         if p.last != Some(key) {
             match p.upload(device, queue, &self.frame.frame, crop) {
                 Ok(()) => {
                     p.last = Some(key);
+                    p.rejected = None;
                     self.shared.metrics.uploaded.fetch_add(1, Ordering::Relaxed);
                     self.shared
                         .media
@@ -371,9 +378,13 @@ impl Primitive for VideoPrimitive {
                 }
                 Err(e) => {
                     p.valid = false;
+                    if p.rejected == Some(key) {
+                        p.valid = false;
+                        return;
+                    }
                     if p.last != Some(key) {
                         self.shared.report(format!("Video display: {e:#}"));
-                        p.last = Some(key);
+                        p.rejected = Some(key);
                     }
                 }
             }
@@ -430,7 +441,12 @@ impl Primitive for VideoPrimitive {
                     .metrics
                     .last_submission_us
                     .swap(now, Ordering::Relaxed);
-                if previous != 0 {
+                let previous_epoch = self
+                    .shared
+                    .metrics
+                    .last_submission_epoch
+                    .swap(self.frame.epoch, Ordering::Relaxed);
+                if previous != 0 && previous_epoch == self.frame.epoch {
                     let mut intervals = self.shared.metrics.present_intervals_us.lock().unwrap();
                     if intervals.len() == 4096 {
                         intervals.pop_front();

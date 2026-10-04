@@ -3,7 +3,6 @@ pub mod crypto;
 pub mod desktop;
 pub mod discovery;
 pub mod hls;
-pub mod integration;
 pub mod media;
 pub mod protocol;
 pub mod rtp;

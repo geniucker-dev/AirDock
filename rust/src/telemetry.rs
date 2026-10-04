@@ -7,6 +7,7 @@ pub struct Metrics {
     pub decoded: AtomicU64,
     pub presented: AtomicU64,
     pub last_submitted_sequence: AtomicU64,
+    pub last_submission_epoch: AtomicU64,
     pub last_submission_us: AtomicU64,
     pub replaced: AtomicU64,
     pub bytes: AtomicU64,

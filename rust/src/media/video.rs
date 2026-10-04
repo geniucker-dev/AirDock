@@ -177,14 +177,9 @@ impl Decoder {
     pub fn new(config: Configuration, hardware: bool) -> Result<Self> {
         #[cfg(windows)]
         if hardware {
-            for backend in if crate::render::compositor::VENDOR
-                .load(std::sync::atomic::Ordering::Acquire)
-                == 0x10de
-            {
-                [Backend::Nvdec, Backend::D3d11]
-            } else {
-                [Backend::D3d11, Backend::Nvdec]
-            } {
+            // Prefer D3D11VA on the rendering adapter to reduce hybrid-GPU
+            // traffic and power. NVDEC is retained as the next decode backend.
+            for backend in [Backend::D3d11, Backend::Nvdec] {
                 match Self::open(config.clone(), backend) {
                     Ok(mut decoder) => {
                         decoder.requested_hardware = hardware;
@@ -242,11 +237,28 @@ impl Decoder {
                 } else {
                     ffmpeg::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA
                 };
+                let adapter = if backend == Backend::D3d11 {
+                    crate::platform::decoder_adapter(
+                        crate::render::compositor::VENDOR
+                            .load(std::sync::atomic::Ordering::Acquire),
+                        crate::render::compositor::DEVICE
+                            .load(std::sync::atomic::Ordering::Acquire),
+                    )
+                    .and_then(|s| std::ffi::CString::new(s).ok())
+                } else {
+                    None
+                };
+                if let Some(index) = &adapter {
+                    tracing::info!(
+                        "D3D11VA render-matched DXGI adapter: {}",
+                        index.to_string_lossy()
+                    );
+                }
                 let mut device = std::ptr::null_mut();
                 let rc = ffmpeg::ffi::av_hwdevice_ctx_create(
                     &mut device,
                     kind,
-                    std::ptr::null(),
+                    adapter.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
                     std::ptr::null_mut(),
                     0,
                 );

@@ -14,6 +14,7 @@ use std::{
 };
 pub static STATUS: AtomicU8 = AtomicU8::new(0); // 1 GPU, 2 software GPU, 3 software UI only, 4 recovering, 5 failed
 pub static PREFERENCE: AtomicU8 = AtomicU8::new(0); // balanced, low power, high performance
+pub static DEVICE: AtomicU32 = AtomicU32::new(0);
 pub static VENDOR: AtomicU32 = AtomicU32::new(0);
 pub type Renderer = iced_renderer::fallback::Renderer<GpuRenderer, iced_tiny_skia::Renderer>;
 pub struct GpuRenderer(pub iced_wgpu::Renderer);
@@ -198,7 +199,7 @@ impl graphics::Compositor for GpuCompositor {
                 let format=capabilities.formats.iter().copied().find(|f|f.is_srgb()==graphics::color::GAMMA_CORRECTION).or(capabilities.formats.first().copied());
                 let Some(format)=format else{continue};let lost=Arc::new(AtomicBool::new(false));
                 match Self::engine(&adapter,format,settings,shell.clone(),lost.clone()).await {
-                    Ok((device,engine))=>{let info=adapter.get_info();VENDOR.store(info.vendor,Ordering::Release);STATUS.store(if info.device_type==wgpu::DeviceType::Cpu{2}else{1},Ordering::Release);tracing::info!("Render adapter: {} ({:?}, vendor {:x})",info.name,info.backend,info.vendor);return Ok(Self{instance,adapter,device,engine,format,settings,shell,lost,last_retry:Instant::now()-Duration::from_secs(5),retries:0});},
+                    Ok((device,engine))=>{let info=adapter.get_info();VENDOR.store(info.vendor,Ordering::Release);DEVICE.store(info.device,Ordering::Release);STATUS.store(if info.device_type==wgpu::DeviceType::Cpu{2}else{1},Ordering::Release);tracing::info!("Render adapter: {} ({:?}, vendor {:x})",info.name,info.backend,info.vendor);return Ok(Self{instance,adapter,device,engine,format,settings,shell,lost,last_retry:Instant::now()-Duration::from_secs(5),retries:0});},
                     Err(e)=>tracing::warn!("GPU initialization failed on {}: {e}",adapter.get_info().name),
                 }
             }

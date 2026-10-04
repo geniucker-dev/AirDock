@@ -221,7 +221,7 @@ enum Message {
     Devices(Result<Vec<crate::audio::DeviceChoice>, String>),
     Screenshot(window::Screenshot),
     #[cfg(windows)]
-    Tray(crate::integration::tray::Command),
+    Tray(crate::platform::tray::Command),
 }
 #[derive(Clone)]
 struct FrameEvents(Arc<Mutex<Option<mpsc::Receiver<()>>>>, bool);
@@ -256,7 +256,7 @@ fn frame_events(events: &FrameEvents) -> impl futures::Stream<Item = Message> + 
 }
 #[cfg(windows)]
 #[derive(Clone)]
-struct TrayEvents(Arc<Mutex<Option<mpsc::UnboundedReceiver<crate::integration::tray::Command>>>>);
+struct TrayEvents(Arc<Mutex<Option<mpsc::UnboundedReceiver<crate::platform::tray::Command>>>>);
 #[cfg(windows)]
 impl Hash for TrayEvents {
     fn hash<H: Hasher>(&self, h: &mut H) {
@@ -295,6 +295,7 @@ struct App {
     fullscreen: bool,
     crop: bool,
     focus: bool,
+    minimized: bool,
     gpu_warning: bool,
     width: String,
     height: String,
@@ -306,7 +307,7 @@ struct App {
     last_metrics: u64,
     metrics_text: String,
     #[cfg(windows)]
-    tray: Option<crate::integration::tray::Tray>,
+    tray: Option<crate::platform::tray::Tray>,
     #[cfg(windows)]
     tray_events: TrayEvents,
 }
@@ -322,7 +323,7 @@ impl App {
         let (status_sender, status_receiver) = mpsc::channel(1);
         *client.shared.ui.wake.lock().unwrap() = Some(status_sender);
         #[cfg(windows)]
-        let mut tray = crate::integration::tray::Tray::new()
+        let mut tray = crate::platform::tray::Tray::new()
             .map_err(|e| client.shared.report(format!("Tray unavailable: {e:#}")))
             .ok();
         #[cfg(windows)]
@@ -339,6 +340,7 @@ impl App {
             fullscreen: settings.fullscreen,
             crop: false,
             focus: settings.hide_ui,
+            minimized: false,
             gpu_warning: false,
             width: settings.mirror_width.to_string(),
             height: settings.mirror_height.to_string(),
@@ -394,7 +396,13 @@ impl App {
             .media
             .display
             .visible
-            .store(true, Ordering::Release);
+            .store(self.page == 0, Ordering::Release);
+        self.minimized = false;
+        self.client
+            .shared
+            .metrics
+            .last_submission_us
+            .store(0, Ordering::Relaxed);
         self.client.shared.ui.visible.store(true, Ordering::Release);
         task.map(|_| Message::Opened)
     }
@@ -439,7 +447,15 @@ impl App {
         Subscription::batch(subscriptions)
     }
     fn refresh(&mut self) {
+        let paused = self.status.paused;
         self.status = self.client.shared.ui.lock().unwrap().clone();
+        if paused != self.status.paused {
+            self.client
+                .shared
+                .metrics
+                .last_submission_us
+                .store(0, Ordering::Relaxed);
+        }
         let epoch = self.client.shared.generation();
         self.frame = self
             .client
@@ -481,7 +497,7 @@ impl App {
                             .display
                             .visible
                             .store(false, Ordering::Release);
-                        crate::integration::startup_error(&self.status.error);
+                        crate::platform::startup_error(&self.status.error);
                     }
                 }
                 let n = self.client.shared.metrics.presented.load(Ordering::Relaxed);
@@ -545,12 +561,18 @@ impl App {
             }
             Message::Window(_, _) => {}
             Message::Minimized(minimized) => {
-                self.client
-                    .shared
-                    .media
-                    .display
-                    .visible
-                    .store(!minimized, Ordering::Release);
+                if self.minimized != minimized {
+                    self.client
+                        .shared
+                        .metrics
+                        .last_submission_us
+                        .store(0, Ordering::Relaxed);
+                }
+                self.minimized = minimized;
+                self.client.shared.media.display.visible.store(
+                    !minimized && self.page == 0 && !self.gpu_warning,
+                    Ordering::Release,
+                );
                 self.client
                     .shared
                     .ui
@@ -562,6 +584,16 @@ impl App {
             }
             Message::Page(page) => {
                 self.page = page;
+                self.client.shared.media.display.visible.store(
+                    page == 0 && self.window.is_some() && !self.minimized && !self.gpu_warning,
+                    Ordering::Release,
+                );
+                self.client
+                    .shared
+                    .metrics
+                    .last_submission_us
+                    .store(0, Ordering::Relaxed);
+                self.refresh();
                 if page == 1 {
                     return Task::perform(
                         async { crate::audio::devices().map_err(|e| format!("{e:#}")) },
@@ -680,10 +712,10 @@ impl App {
             #[cfg(windows)]
             Message::Tray(command) => {
                 return Task::done(match command {
-                    crate::integration::tray::Command::Show => return self.open_window(),
-                    crate::integration::tray::Command::Hide => Message::Hide,
-                    crate::integration::tray::Command::Disconnect => Message::Disconnect,
-                    crate::integration::tray::Command::Quit => Message::Quit,
+                    crate::platform::tray::Command::Show => return self.open_window(),
+                    crate::platform::tray::Command::Hide => Message::Hide,
+                    crate::platform::tray::Command::Disconnect => Message::Disconnect,
+                    crate::platform::tray::Command::Quit => Message::Quit,
                 });
             }
         }
