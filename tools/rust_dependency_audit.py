@@ -20,6 +20,8 @@ def main():
     for source in (ROOT/'rust/src').rglob('*.rs'):
         expected='MIT' if source.name=='playfair.rs' else 'MPL-2.0'
         assert source.read_text().startswith('// SPDX-License-Identifier: '+expected),source
+    assert 'SIL OPEN FONT LICENSE' in (ROOT/'rust/assets/fonts/NOTO-OFL.txt').read_text()
+    assert all((ROOT/'rust/assets/fonts'/f'AirPlayUICJK-{style}.ttf').exists() for style in ('Regular','SemiBold'))
     assert 'SIL OPEN FONT LICENSE' in (ROOT/'rust/assets/fonts/OFL.txt').read_text()
     assert all((ROOT/'rust/assets/fonts'/f'Manrope-{style}.ttf').exists() for style in ('Regular','SemiBold'))
     assert (ROOT/'LICENSES.md').exists() and (ROOT/'licenses/GPL-3.0.txt').exists()

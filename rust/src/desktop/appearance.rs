@@ -5,10 +5,6 @@ use iced::{
     widget::{button, container, pick_list, text_input},
 };
 pub const FONT: Font = Font::with_name("Manrope");
-pub const STRONG: Font = Font {
-    weight: font::Weight::Semibold,
-    ..FONT
-};
 pub const SHELL: Color = Color::from_rgb8(238, 243, 247);
 pub const PAPER: Color = Color::WHITE;
 pub const INK: Color = Color::from_rgb8(24, 53, 72);
@@ -174,5 +170,19 @@ pub fn picker(_: &Theme, status: pick_list::Status) -> pick_list::Style {
             width: 1.,
             radius: 7.into(),
         },
+    }
+}
+
+pub fn font(lang: crate::i18n::Language) -> Font {
+    if lang == crate::i18n::Language::Chinese {
+        Font::with_name("AirPlay UI CJK")
+    } else {
+        FONT
+    }
+}
+pub fn strong(lang: crate::i18n::Language) -> Font {
+    Font {
+        weight: font::Weight::Semibold,
+        ..font(lang)
     }
 }

@@ -45,14 +45,19 @@ Use the same LAN or Windows mobile hotspot, then select the receiver in your
 iPhone/iPad's Screen Mirroring menu. HLS/FCUP playback can be enabled in settings.
 Settings and identity use the existing application configuration directory.
 
-F11 shows the video alone in fullscreen; Escape returns to the previous page.
+Double-click the video area or press F11 to show video alone in fullscreen.
+Double-click again or press Escape to return to the previous page.
 Moving the mouse shows playback controls, which hide after inactivity unless hovered.
 Video keeps its aspect ratio unless Fill/crop was selected. Ctrl+H hides/restores
 controls, Ctrl+D disconnects and Ctrl+Q quits. The Windows tray restores/hides the presentation window,
 disconnects the sender, or quits the whole application. Closing the window does
 not mean quitting the receiver. With Close window to tray disabled, closing
-minimizes to the taskbar instead. Window size/presentation mode save automatically.
-Audio-device selection applies and saves immediately; other settings use Save,
+minimizes to the taskbar instead. Normal window size and true fullscreen mode save
+automatically and restore separately; oversized old bounds are limited to the
+Windows logical work area.
+English and Simplified Chinese are available in Settings → Language, with system
+language detection by default. Language and audio-device selection apply and save
+immediately without committing other unsaved edits; other settings use Save,
 with field validation and explicit unsaved/saved feedback.
 New video sessions automatically show a hidden/minimized player. Audio-only
 connections remain in the tray. Hiding an ongoing session is respected until a

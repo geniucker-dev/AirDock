@@ -75,6 +75,7 @@ def audit(directory):
     assert (directory/'LICENSE').read_text().startswith('Mozilla Public License Version 2.0'), 'Wrong project license in payload'
     assert (directory/'LICENSES.md').exists() and (directory/'licenses/GPL-3.0.txt').exists(), 'Missing license scope or retained GPL reference notices'
     with zipfile.ZipFile(source_archive) as source:
+        assert source.read('rust/assets/fonts/NOTO-OFL.txt')==(directory/'NOTO_LICENSE.txt').read_bytes(), 'Missing or mismatched CJK font license'
         assert source.read('rust/assets/fonts/OFL.txt')==(directory/'MANROPE_LICENSE.txt').read_bytes(), 'Missing or mismatched embedded font license'
         assert source.read('LICENSE')==(directory/'LICENSE').read_bytes(),'Payload/source license mismatch'
         assert tomllib.loads(source.read('Cargo.toml').decode())['package']['license']=='MPL-2.0','Wrong archived manifest license'

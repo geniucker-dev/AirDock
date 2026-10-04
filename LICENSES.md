@@ -20,7 +20,10 @@ Exceptions retain their existing license and attribution:
   The GPL C oracle is a separate test executable and is never linked into the receiver.
 - `rust/native/ports/`: vcpkg MIT attribution in its LICENSE.txt; bundled FFmpeg
   patches/source keep their upstream notices. Runtime FFmpeg DLLs are LGPL.
-- `rust/assets/fonts/`: Manrope, SIL Open Font License 1.1. Original variable
+- `rust/assets/fonts/`: Manrope and the Noto Sans SC derived AirPlay UI CJK faces,
+  SIL Open Font License 1.1. CJK subsets include GB2312 and all UI translations;
+  `tools/rust_cjk_fonts.py` reproduces them from a SHA256-verified upstream input.
+  See `NOTO-OFL.txt`. Manrope's original variable
   font and derived static Regular/SemiBold faces retain OFL; see `OFL.txt`.
   `tools/rust_ui_fonts.py` reproduces the static faces.
 - `tools/installer/INNO-LICENSE.txt`, `tools/licenses/` and Cargo dependencies:

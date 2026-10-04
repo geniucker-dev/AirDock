@@ -135,6 +135,7 @@ jobs:
           Copy-Item LICENSE,LICENSES.md,README.md,THIRD_PARTY_NOTICES.md,Cargo.lock dist-rust/
           Copy-Item -Recurse licenses dist-rust/
           Copy-Item rust/assets/fonts/OFL.txt dist-rust/MANROPE_LICENSE.txt
+          Copy-Item rust/assets/fonts/NOTO-OFL.txt dist-rust/NOTO_LICENSE.txt
           New-Item -ItemType Directory -Force dist-rust/docs,dist-rust/sources | Out-Null
           Copy-Item docs/RUST*.md,docs/CPP_REFERENCE_README.md dist-rust/docs/
           Copy-Item rust/src/playfair_data/AIRFRY-LICENSE.txt dist-rust/

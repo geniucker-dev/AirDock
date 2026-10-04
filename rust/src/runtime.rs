@@ -24,6 +24,10 @@ pub enum Command {
         Settings,
         futures::channel::oneshot::Sender<Result<Settings, String>>,
     ),
+    Language(
+        crate::i18n::Language,
+        futures::channel::oneshot::Sender<Result<Settings, String>>,
+    ),
     AudioOutput(
         String,
         futures::channel::oneshot::Sender<Result<Settings, String>>,
@@ -71,6 +75,7 @@ impl Runtime {
                                 // Draft saves cannot overwrite independently committed audio/geometry.
                                 WindowPreferences::from_settings(&current).apply(&mut settings);
                                 settings.audio_device.clone_from(&current.audio_device);
+                                settings.language = current.language;
                                 settings.validate()?;
                                 let previous_autostart = current.autostart;
                                 if settings.autostart != previous_autostart {
@@ -93,6 +98,19 @@ impl Runtime {
                                 }
                                 Ok(())
                             })();
+                            let _ = reply.send(
+                                result
+                                    .map(|_| state.settings.read().unwrap().clone())
+                                    .map_err(|e| format!("{e:#}")),
+                            );
+                        }
+                        Ok(Command::Language(language, reply)) => {
+                            let mut settings = state.settings.read().unwrap().clone();
+                            settings.language = language;
+                            let result = settings.save(&directory.join("settings.json"));
+                            if result.is_ok() {
+                                *state.settings.write().unwrap() = settings;
+                            }
                             let _ = reply.send(
                                 result
                                     .map(|_| state.settings.read().unwrap().clone())
@@ -210,11 +228,16 @@ mod tests {
             Command::AudioOutput("Selected device".into(), reply)
         })
         .unwrap();
+        request(&runtime, |reply| {
+            Command::Language(crate::i18n::Language::Chinese, reply)
+        })
+        .unwrap();
         let mut stale_form = initial;
         stale_form.name = "Saved form".into();
         let saved = request(&runtime, |reply| Command::Settings(stale_form, reply)).unwrap();
         assert_eq!(saved.window_width, 960);
         assert_eq!(saved.audio_device, "Selected device");
+        assert_eq!(saved.language, crate::i18n::Language::Chinese);
         assert_eq!(saved.name, "Saved form");
         assert_eq!(
             Settings::load(&directory.join("settings.json")).unwrap(),
@@ -225,6 +248,13 @@ mod tests {
         assert!(
             request(&runtime, |reply| Command::AudioOutput(
                 "Must not apply".into(),
+                reply
+            ))
+            .is_err()
+        );
+        assert!(
+            request(&runtime, |reply| Command::Language(
+                crate::i18n::Language::English,
                 reply
             ))
             .is_err()

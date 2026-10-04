@@ -26,7 +26,13 @@ and logs; do not infer physical hardware acceptance from a green build.
 - Real UI interactions verify immediate audio selection with an unsaved draft,
   debounced geometry persistence and restart, validation without partial writes,
   reset/save separation, fullscreen mouse controls, mute/unmute and auto-hide.
-- Runtime regressions verify independent audio/window updates survive a stale
+- Locale UI regression exercises actual fullscreen restart, onscreen normal bounds,
+  double-click entry/exit, Chinese/English switching and persisted restart, without
+  saving unrelated drafts. Chinese faces are embedded with OFL notices.
+- Mirror AV diagnostics normalize the known NTP/Unix epoch offset and reject
+  incomparable/stale clocks. HLS keeps its original media PTS timebase. Hidden
+  frame replacements are reported separately from visible playback skips.
+- Runtime regressions verify independent audio/window/language updates survive a stale
   settings form, and a failed file write does not change active settings.
 - Encrypted fullscreen video reaches both screen edges with black aspect-ratio
   bars instead of UI chrome. Entry from settings/startup and page restoration,

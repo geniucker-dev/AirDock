@@ -22,6 +22,7 @@ pub struct Metrics {
     pub last_submission_epoch: AtomicU64,
     pub last_submission_us: AtomicU64,
     pub replaced: AtomicU64,
+    pub hidden_replaced: AtomicU64,
     pub bytes: AtomicU64,
     pub latency_us: AtomicU64,
     pub latency_samples: Mutex<VecDeque<u64>>,

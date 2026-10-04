@@ -13,9 +13,7 @@ use fs2::FileExt;
 use futures::{StreamExt, channel::mpsc};
 use iced::{
     Element, Length, Subscription, Task, Theme,
-    widget::{
-        self, button, checkbox, container, pick_list, row, scrollable, slider, text, text_input,
-    },
+    widget::{self, button, checkbox, container, pick_list, row, scrollable, slider, text_input},
     window,
 };
 use std::{
@@ -166,9 +164,15 @@ pub fn run() -> Result<()> {
         let client = runtime.client.clone();
         let a = args.clone();
         let graphics_settings = iced::Settings {
-            default_font: appearance::FONT,
+            default_font: appearance::font(settings.language.resolve()),
             default_text_size: iced::Pixels(14.),
             fonts: vec![
+                include_bytes!("../assets/fonts/AirPlayUICJK-Regular.ttf")
+                    .as_slice()
+                    .into(),
+                include_bytes!("../assets/fonts/AirPlayUICJK-SemiBold.ttf")
+                    .as_slice()
+                    .into(),
                 include_bytes!("../assets/fonts/Manrope-Regular.ttf")
                     .as_slice()
                     .into(),
@@ -215,6 +219,7 @@ enum Message {
     Opened,
     Window(window::Id, window::Event),
     Minimized(window::Id, bool),
+    ModeApplied(window::Id, window::Mode, u64, u8),
     CheckedSize(window::Id, iced::Size, window::Mode, u64),
     SettingsSaved(Result<Settings, String>),
     AudioSaved(Result<Settings, String>),
@@ -240,6 +245,8 @@ enum Message {
     Fps(String),
     Gpu(String),
     Diagnostics,
+    Language(crate::i18n::Language),
+    LanguageSaved(Result<Settings, String>),
     Audio(crate::audio::DeviceChoice),
     Hardware(bool),
     Hevc(bool),
@@ -344,6 +351,9 @@ struct App {
     preferences_pending: bool,
     quit_requested: bool,
     window_mode_revision: u64,
+    mode_transition: bool,
+    restoring_size: Option<iced::Size>,
+    locale: crate::i18n::Language,
     controls_visible: bool,
     controls_hovered: bool,
     controls_used: Instant,
@@ -394,7 +404,7 @@ impl App {
         let (status_sender, status_receiver) = mpsc::channel(1);
         *client.shared.ui.wake.lock().unwrap() = Some(status_sender);
         #[cfg(windows)]
-        let mut tray = crate::platform::tray::Tray::new()
+        let mut tray = crate::platform::tray::Tray::new(settings.language.resolve())
             .map_err(|e| client.shared.report(format!("Tray unavailable: {e:#}")))
             .ok();
         #[cfg(windows)]
@@ -423,6 +433,9 @@ impl App {
             preferences_pending: false,
             quit_requested: false,
             window_mode_revision: 0,
+            mode_transition: false,
+            restoring_size: None,
+            locale: settings.language.resolve(),
             controls_visible: false,
             controls_hovered: false,
             controls_used: Instant::now(),
@@ -451,6 +464,9 @@ impl App {
             app.open_window()
         };
         (app, task)
+    }
+    fn language(&self) -> crate::i18n::Language {
+        self.locale
     }
     fn tray_available(&self) -> bool {
         #[cfg(windows)]
@@ -481,14 +497,26 @@ impl App {
             self.refresh();
             return Task::batch([window::minimize(id, false), window::gain_focus(id)]);
         }
+        let restored = crate::config::restored_window_size(
+            self.preferences.width,
+            self.preferences.height,
+            crate::platform::desktop_work_area(),
+        );
+        self.preferences.width = restored.0;
+        self.preferences.height = restored.1;
+        self.mode_transition = self.fullscreen;
         let (id, task) = window::open(window::Settings {
             size: iced::Size::new(
                 self.preferences.width as f32,
                 self.preferences.height as f32,
             ),
-            min_size: Some(iced::Size::new(760., 520.)),
+            min_size: Some(iced::Size::new(
+                760.0_f32.min(restored.0 as f32),
+                520.0_f32.min(restored.1 as f32),
+            )),
             exit_on_close_request: false,
-            fullscreen: self.fullscreen,
+            position: window::Position::Centered,
+            fullscreen: false,
             ..Default::default()
         });
         self.window = Some(id);
@@ -506,6 +534,46 @@ impl App {
             .store(0, Ordering::Relaxed);
         self.client.shared.ui.visible.store(true, Ordering::Release);
         task.map(|_| Message::Opened)
+    }
+    fn apply_window_mode(&mut self) -> Task<Message> {
+        let Some(id) = self.window else {
+            return Task::none();
+        };
+        self.mode_transition = true;
+        self.restoring_size = (!self.fullscreen).then_some(iced::Size::new(
+            self.preferences.width as f32,
+            self.preferences.height as f32,
+        ));
+        let revision = self.window_mode_revision;
+        let mut task = window::set_mode(
+            id,
+            if self.fullscreen {
+                window::Mode::Fullscreen
+            } else {
+                window::Mode::Windowed
+            },
+        );
+        if !self.fullscreen {
+            task = task.chain(window::resize(
+                id,
+                iced::Size::new(
+                    self.preferences.width as f32,
+                    self.preferences.height as f32,
+                ),
+            ));
+        }
+        task.chain(Self::check_window_mode(id, revision, 0))
+    }
+    fn check_window_mode(id: window::Id, revision: u64, attempt: u8) -> Task<Message> {
+        // X11/Windows mode changes settle asynchronously; an immediate query
+        // can still return the preceding mode even though the change succeeds.
+        Task::perform(
+            async { tokio::time::sleep(Duration::from_millis(100)).await },
+            |_| (),
+        )
+        .then(move |_| {
+            window::mode(id).map(move |mode| Message::ModeApplied(id, mode, revision, attempt))
+        })
     }
     fn subscription(&self) -> Subscription<Message> {
         #[allow(unused_mut)]
@@ -673,6 +741,9 @@ impl App {
                         .fetch_add(1, Ordering::Relaxed);
                 }
                 self.refresh();
+                if matches!(message, Message::Opened) && self.fullscreen {
+                    return self.apply_window_mode();
+                }
                 if let Some(task) = self.reveal_video() {
                     return task;
                 }
@@ -788,16 +859,46 @@ impl App {
             Message::Window(id, window::Event::Resized(size)) => {
                 if self.window == Some(id) {
                     self.viewport = size;
+                    if !self.fullscreen
+                        && self
+                            .restoring_size
+                            .is_some_and(|target| size_matches(target, size))
+                    {
+                        self.restoring_size = None;
+                        self.mode_transition = false;
+                    }
                 }
-                if self.window == Some(id) && !self.fullscreen {
+                if self.window == Some(id) && !self.fullscreen && !self.mode_transition {
                     let revision = self.window_mode_revision;
                     return window::mode(id)
                         .map(move |mode| Message::CheckedSize(id, size, mode, revision));
                 }
             }
+            Message::ModeApplied(id, mode, revision, attempt) => {
+                if self.window == Some(id) && revision == self.window_mode_revision {
+                    if self.fullscreen
+                        || self.restoring_size.is_none()
+                        || self
+                            .restoring_size
+                            .is_some_and(|target| size_matches(target, self.viewport))
+                    {
+                        self.mode_transition = false;
+                        self.restoring_size = None;
+                    }
+                    if (mode == window::Mode::Fullscreen) != self.fullscreen {
+                        if attempt < 9 {
+                            return Self::check_window_mode(id, revision, attempt + 1);
+                        }
+                        self.client
+                            .shared
+                            .report("Window mode could not be applied".into());
+                    }
+                }
+            }
             Message::CheckedSize(id, size, mode, revision) => {
                 if self.window == Some(id)
                     && !self.fullscreen
+                    && !self.mode_transition
                     && mode == window::Mode::Windowed
                     && revision == self.window_mode_revision
                     && size.width >= 760.
@@ -894,19 +995,7 @@ impl App {
                     .last_submission_us
                     .store(0, Ordering::Relaxed);
                 self.refresh();
-                if let Some(id) = self.window {
-                    return Task::batch([
-                        self.save_preferences(),
-                        window::set_mode(
-                            id,
-                            if self.fullscreen {
-                                window::Mode::Fullscreen
-                            } else {
-                                window::Mode::Windowed
-                            },
-                        ),
-                    ]);
-                }
+                return Task::batch([self.save_preferences(), self.apply_window_mode()]);
             }
             Message::Crop => self.crop = !self.crop,
             Message::Focus => {
@@ -1053,6 +1142,45 @@ impl App {
                     self.sample_metrics();
                 }
             }
+            Message::Language(language) => {
+                if self.form.pending.is_some() || self.form.audio_pending {
+                    return Task::none();
+                }
+                self.form.audio_pending = true;
+                let (reply, receive) = futures::channel::oneshot::channel();
+                if let Err(error) = self
+                    .client
+                    .commands
+                    .try_send(runtime::Command::Language(language, reply))
+                {
+                    return Task::done(Message::LanguageSaved(Err(error.to_string())));
+                }
+                return Task::perform(
+                    async move {
+                        receive
+                            .await
+                            .unwrap_or_else(|_| Err("Receiver stopped".into()))
+                    },
+                    Message::LanguageSaved,
+                );
+            }
+            Message::LanguageSaved(result) => {
+                self.form.audio_pending = false;
+                match result {
+                    Ok(saved) => {
+                        self.locale = saved.language.resolve();
+                        self.form.saved.language = saved.language;
+                        self.form.draft.language = saved.language;
+                        self.form.feedback = "Settings saved".into();
+                        self.sample_metrics();
+                        #[cfg(windows)]
+                        if let Some(tray) = self.tray.as_mut() {
+                            tray.set_language(saved.language.resolve());
+                        }
+                    }
+                    Err(error) => self.form.feedback = format!("Could not save: {error}"),
+                }
+            }
             Message::Gpu(v) => self.form.draft.gpu_preference = v,
             Message::Audio(v) => {
                 if self.form.audio_pending
@@ -1184,7 +1312,10 @@ impl App {
                 processing_ms: (submitted != self.last_metrics)
                     .then(|| m.latency_us.load(Ordering::Relaxed) as f64 / 1000.),
                 mbps: bytes.saturating_sub(self.last_bytes) as f64 * 8. / seconds / 1_000_000.,
-                dropped: m.replaced.load(Ordering::Relaxed)
+                dropped: m
+                    .replaced
+                    .load(Ordering::Relaxed)
+                    .saturating_sub(m.hidden_replaced.load(Ordering::Relaxed))
                     + m.schedule_dropped.load(Ordering::Relaxed),
                 video: format!(
                     "Source: {}\nCodec: {}\nResolution: {}\nDecoder: {}\nRender GPU: {}\nColour: {}\nDecoded: {} ({:.1} fps)",
@@ -1198,7 +1329,8 @@ impl App {
                     decoded.saturating_sub(self.last_decoded) as f64 / seconds
                 ),
                 timing: format!(
-                    "Submitted frames: {submitted}\nProcessing P95 / P99: {} / {} ms\nFrame interval P95 / P99: {} / {} ms\nAV offset: {}\nPending video frames: {}\nReplaced / late / stale: {} / {} / {}\nTotal data: {:.1} MiB",
+                    "Submitted frames: {submitted} ({:.1} fps)\nProcessing P95 / P99: {} / {} ms\nFrame interval P95 / P99: {} / {} ms\nAV offset: {}\nPending video frames: {}\nReplaced / late / stale: {} / {} / {}\nHidden replacements: {}\nTotal data: {:.1} MiB",
+                    submitted.saturating_sub(self.last_metrics) as f64 / seconds,
                     ms("p95_receive_to_present_us"),
                     ms("p99_receive_to_present_us"),
                     ms("p95_new_submission_interval_us"),
@@ -1208,6 +1340,7 @@ impl App {
                     m.replaced.load(Ordering::Relaxed),
                     m.schedule_dropped.load(Ordering::Relaxed),
                     m.stale_dropped.load(Ordering::Relaxed),
+                    m.hidden_replaced.load(Ordering::Relaxed),
                     bytes as f64 / 1_048_576.
                 ),
                 audio: format!(
@@ -1237,6 +1370,11 @@ impl App {
         self.last_bytes = bytes;
         self.sampled_at = Instant::now();
     }
+}
+
+// Mixed-DPI window managers may round a logical resize by a physical pixel.
+fn size_matches(target: iced::Size, actual: iced::Size) -> bool {
+    (target.width - actual.width).abs() <= 1. && (target.height - actual.height).abs() <= 1.
 }
 
 #[cfg(test)]

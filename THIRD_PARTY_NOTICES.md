@@ -5,6 +5,11 @@ Project-owned Iced/Rust source is MPL-2.0; see LICENSES.md and
 keeps its original license. Historical C++ GPL sources are test/reference material
 and are not application runtime dependencies.
 
+- **AirPlay UI CJK**: static Regular/SemiBold subsets derived from Noto Sans SC,
+  copyright 2014–2021 Adobe. SIL OFL 1.1; renamed to avoid upstream reserved names.
+  https://github.com/google/fonts/tree/main/ofl/notosanssc. Includes GB2312 and all
+  translated UI characters. Reproduction tool/input hash accompany source;
+  NOTO_LICENSE.txt accompanies binary distributions.
 - **Manrope**: Copyright 2018 The Manrope Project Authors, SIL OFL 1.1.
   https://github.com/sharanda/manrope. The application embeds static 400/600
   faces derived from the Google Fonts variable font. Original font, OFL and

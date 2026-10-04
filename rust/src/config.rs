@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 pub struct Settings {
     pub schema_version: u32,
     pub audio_device: String,
+    pub language: crate::i18n::Language,
     pub gpu_preference: String,
     pub name: String,
     pub mirror_width: u32,
@@ -52,11 +53,21 @@ impl WindowPreferences {
     }
 }
 
+/// Clamp old geometry against the logical desktop work area before opening.
+pub fn restored_window_size(width: u32, height: u32, area: Option<(u32, u32)>) -> (u32, u32) {
+    let (w, h) = area.unwrap_or((8192, 8192));
+    (
+        width.clamp(760.min(w), w.max(1)),
+        height.clamp(520.min(h), h.max(1)),
+    )
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             schema_version: 2,
             audio_device: "default".into(),
+            language: crate::i18n::Language::Auto,
             gpu_preference: "balanced".into(),
             name: "AirPlay-Windows".into(),
             mirror_width: 2560,
@@ -154,6 +165,17 @@ pub fn data_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fullscreen_geometry_is_clamped_to_logical_work_area() {
+        assert_eq!(
+            restored_window_size(1920, 1080, Some((1504, 800))),
+            (1504, 800)
+        );
+        assert_eq!(
+            restored_window_size(1120, 760, Some((1504, 800))),
+            (1120, 760)
+        );
+    }
     #[test]
     fn legacy_recording_values_are_ignored_without_rewriting_file() {
         let path = std::env::temp_dir().join(format!(

@@ -59,6 +59,7 @@ and actual package/source license consistency.
 | `rust/src/desktop/form.rs` | MPL-2.0 | Project-authored Rust UI, settings, discovery or platform integration |
 | `rust/src/desktop.rs` | MPL-2.0 | Project-authored Rust UI, settings, discovery or platform integration |
 | `rust/src/discovery.rs` | MPL-2.0 | Project-authored Rust UI, settings, discovery or platform integration |
+| `rust/src/i18n.rs` | MPL-2.0 | Project-authored locale selection and Chinese/English UI translations |
 | `rust/src/hls.rs` | MPL-2.0 | Project-authored Rust protocol/media behavior; C++ contract comparison, Rust crate APIs |
 | `rust/src/lib.rs` | MPL-2.0 | Project-authored Rust UI, settings, discovery or platform integration |
 | `rust/src/main.rs` | MPL-2.0 | Project-authored Rust UI, settings, discovery or platform integration |
@@ -101,3 +102,8 @@ sources or protocol data.
 Manrope fonts in `rust/assets/fonts/` retain SIL OFL 1.1. The original Google
 Fonts variable face and deterministic static-face reproduction tool are included;
 these third-party font files are not relicensed MPL.
+
+The AirPlay UI CJK fonts are renamed static Noto Sans SC subsets under SIL OFL
+1.1. Reproduction code records the upstream input SHA256; all translated UI
+characters and the common GB2312 set are retained. The font license accompanies
+the source and binary packages.

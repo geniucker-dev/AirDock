@@ -66,6 +66,7 @@ struct PreparedFrame {
     sequence: u64,
     received: Instant,
     pts: Option<crate::playback::MediaTime>,
+    hls: bool,
 }
 pub struct VideoPipeline {
     pub pipeline: wgpu::RenderPipeline,
@@ -531,6 +532,7 @@ impl Primitive for VideoPrimitive {
                         sequence: frame.sequence,
                         received: frame.received,
                         pts: frame.pts,
+                        hls: frame.hls,
                     });
                     self.shared.metrics.uploaded.fetch_add(1, Ordering::Relaxed);
                     let depth = p.key.unwrap().3.depth();
@@ -614,18 +616,29 @@ impl Primitive for VideoPrimitive {
                     .metrics
                     .presented
                     .fetch_add(1, Ordering::Relaxed);
-                if let Some(pts) = frame.pts
-                    && let Some(audio) = self.shared.media.audio_clock.position(frame.epoch)
-                {
+                let offset = frame.pts.and_then(|pts| {
+                    self.shared
+                        .media
+                        .audio_clock
+                        .position(frame.epoch)
+                        .and_then(|audio| {
+                            if frame.hls {
+                                pts.micros().checked_sub(audio)
+                            } else {
+                                crate::playback::mirror_av_offset(pts.micros(), audio)
+                            }
+                        })
+                });
+                if let Some(offset) = offset {
                     self.shared
                         .metrics
                         .estimated_av_offset_us
-                        .store(pts.micros().saturating_sub(audio), Ordering::Relaxed);
-                    self.shared
-                        .metrics
-                        .estimated_av_available
-                        .store(true, Ordering::Release);
+                        .store(offset, Ordering::Relaxed);
                 }
+                self.shared
+                    .metrics
+                    .estimated_av_available
+                    .store(offset.is_some(), Ordering::Release);
                 let latency = frame.received.elapsed().as_micros() as u64;
                 self.shared
                     .metrics

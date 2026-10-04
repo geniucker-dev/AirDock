@@ -150,10 +150,11 @@ pub mod tray {
     }
     pub struct Tray {
         _icon: TrayIcon,
+        items: Vec<(MenuItem, Command)>,
         events: Option<futures::channel::mpsc::UnboundedReceiver<Command>>,
     }
     impl Tray {
-        pub fn new() -> Result<Self> {
+        pub fn new(language: crate::i18n::Language) -> Result<Self> {
             let menu = Menu::new();
             let mut items = Vec::new();
             for (title, command) in [
@@ -161,12 +162,12 @@ pub mod tray {
                 ("Hide to tray", Command::Hide),
                 ("Disconnect device", Command::Disconnect),
             ] {
-                let item = MenuItem::new(title, true, None);
+                let item = MenuItem::new(language.translate(title).as_ref(), true, None);
                 menu.append(&item)?;
                 items.push((item, command));
             }
             menu.append(&PredefinedMenuItem::separator())?;
-            let quit = MenuItem::new("Quit", true, None);
+            let quit = MenuItem::new(language.translate("Quit").as_ref(), true, None);
             menu.append(&quit)?;
             items.push((quit, Command::Quit));
             let mut pixels = vec![0u8; 32 * 32 * 4];
@@ -184,7 +185,11 @@ pub mod tray {
                 }
             }
             let icon = TrayIconBuilder::new()
-                .with_tooltip("AirPlay-Windows — receiver running")
+                .with_tooltip(
+                    language
+                        .translate("AirPlay-Windows — receiver running")
+                        .as_ref(),
+                )
                 .with_menu(Box::new(menu))
                 .with_icon(Icon::from_rgba(pixels, 32, 32)?)
                 .build()?;
@@ -216,8 +221,25 @@ pub mod tray {
             }));
             Ok(Self {
                 _icon: icon,
+                items,
                 events: Some(events),
             })
+        }
+        pub fn set_language(&mut self, language: crate::i18n::Language) {
+            for (item, command) in &self.items {
+                let label = match command {
+                    Command::Show => "Show AirPlay-Windows",
+                    Command::Hide => "Hide to tray",
+                    Command::Disconnect => "Disconnect device",
+                    Command::Quit => "Quit",
+                };
+                item.set_text(language.translate(label).as_ref());
+            }
+            let _ = self._icon.set_tooltip(Some(
+                language
+                    .translate("AirPlay-Windows — receiver running")
+                    .as_ref(),
+            ));
         }
         pub fn take_events(&mut self) -> futures::channel::mpsc::UnboundedReceiver<Command> {
             self.events.take().expect("tray subscription starts once")
@@ -372,4 +394,35 @@ fn startup_adapter() -> Option<(u32, u32)> {
         let description = adapter.GetDesc1().ok()?;
         Some((description.VendorId, description.DeviceId))
     }
+}
+
+/// Primary monitor logical work area with a margin for window borders/titlebar.
+pub fn desktop_work_area() -> Option<(u32, u32)> {
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::{
+            Foundation::RECT,
+            UI::{
+                HiDpi::GetDpiForSystem,
+                WindowsAndMessaging::{
+                    SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+                },
+            },
+        };
+        let mut area = RECT::default();
+        SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            Some((&mut area as *mut RECT).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .ok()?;
+        let scale = GetDpiForSystem().max(96) as f32 / 96.;
+        return Some((
+            ((area.right - area.left) as f32 / scale - 32.).max(1.) as u32,
+            ((area.bottom - area.top) as f32 / scale - 64.).max(1.) as u32,
+        ));
+    }
+    #[cfg(not(windows))]
+    None
 }

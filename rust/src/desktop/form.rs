@@ -45,6 +45,7 @@ impl Form {
         let mut draft = self.draft.clone();
         WindowPreferences::from_settings(&self.saved).apply(&mut draft);
         draft.audio_device.clone_from(&self.saved.audio_device);
+        draft.language = self.saved.language;
         draft.mirror_width = self.saved.mirror_width;
         draft.mirror_height = self.saved.mirror_height;
         draft.max_fps = self.saved.max_fps;
@@ -128,6 +129,7 @@ impl Form {
         self.draft = Settings::default();
         WindowPreferences::from_settings(&self.saved).apply(&mut self.draft);
         self.draft.audio_device.clone_from(&self.saved.audio_device);
+        self.draft.language = self.saved.language;
         self.width = self.draft.mirror_width.to_string();
         self.height = self.draft.mirror_height.to_string();
         self.fps = self.draft.max_fps.to_string();

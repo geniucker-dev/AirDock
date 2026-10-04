@@ -58,6 +58,23 @@ impl MediaTime {
     }
 }
 
+/// AirPlay mirror timestamps may use Unix seconds, whereas RAOP sync uses NTP
+/// seconds since 1900. Correct only the known epoch difference near a plausible
+/// live offset; arbitrary/missing clocks must never produce a displayed estimate.
+pub fn mirror_av_offset(video_us: i64, audio_us: i64) -> Option<i64> {
+    const EPOCH_US: i64 = 2_208_988_800_000_000;
+    const LIVE_BOUND_US: i64 = 10_000_000;
+    let delta = video_us.checked_sub(audio_us)?;
+    for adjustment in [0, EPOCH_US, -EPOCH_US] {
+        if let Some(offset) = delta.checked_add(adjustment)
+            && offset.unsigned_abs() <= LIVE_BOUND_US as u64
+        {
+            return Some(offset);
+        }
+    }
+    None
+}
+
 /// Snapshot of the estimated audible PCM position, never the ring write position.
 pub struct AudioClock {
     origin: Instant,
@@ -148,6 +165,9 @@ impl DisplayMailbox {
             && old.sequence > self.consumed.load(Ordering::Acquire)
         {
             metrics.replaced.fetch_add(1, Ordering::Relaxed);
+            if !self.visible.load(Ordering::Acquire) {
+                metrics.hidden_replaced.fetch_add(1, Ordering::Relaxed);
+            }
         }
         self.revision.fetch_add(1, Ordering::Release);
         self.ready.notify_all();
@@ -401,6 +421,7 @@ mod tests {
             mailbox.publish(frame(sequence), &metrics);
         }
         assert!(receiver.next().now_or_never().is_none());
+        assert_eq!(metrics.hidden_replaced.load(Ordering::Relaxed), 119);
         mailbox.clear();
         assert_eq!(receiver.next().now_or_never(), Some(Some(())));
         mailbox.publish(frame(121), &metrics);
@@ -408,6 +429,8 @@ mod tests {
         mailbox.visible.store(true, Ordering::Release);
         mailbox.publish(frame(122), &metrics);
         assert_eq!(receiver.next().now_or_never(), Some(Some(())));
+        assert_eq!(metrics.replaced.load(Ordering::Relaxed), 120);
+        assert_eq!(metrics.hidden_replaced.load(Ordering::Relaxed), 119);
     }
     #[test]
     fn future_word_frames_keep_bounded_intake_and_shutdown_unblocks_producer() {
@@ -454,6 +477,17 @@ mod tests {
             "At most one additional blocked producer frame"
         );
         assert_eq!(p.pending_frames(), 0);
+    }
+    #[test]
+    fn mirror_av_epoch_normalization_and_unknown_clock() {
+        let unix = 1_800_000_000_000_000;
+        let ntp = unix + 2_208_988_800_000_000;
+        assert_eq!(mirror_av_offset(unix + 83_500, ntp), Some(83_500));
+        assert_eq!(mirror_av_offset(ntp - 50_000, unix), Some(-50_000));
+        assert_eq!(mirror_av_offset(ntp + 25_000, ntp), Some(25_000));
+        assert_eq!(mirror_av_offset(123_000, ntp), None);
+        assert_eq!(mirror_av_offset(i64::MIN, i64::MAX), None);
+        assert_eq!(mirror_av_offset(i64::MIN, 0), None);
     }
     #[test]
     fn rational_pts_and_ntp_keep_precision() {
