@@ -17,14 +17,14 @@ RUN = r'Software\Microsoft\Windows\CurrentVersion\Run'
 
 def run_value():
     try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN) as key:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
             return winreg.QueryValueEx(key, 'AirPlay-Windows')
     except FileNotFoundError:
         return None
 
 
 def set_run(value):
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN) as key:
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN, 0, winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as key:
         if value is None:
             try: winreg.DeleteValue(key, 'AirPlay-Windows')
             except FileNotFoundError: pass
