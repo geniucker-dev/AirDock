@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Verify normal cleanup on Unix termination while an encrypted mirror session is active.
 Windows console/tray shutdown remains separately exercised by platform acceptance.
 """

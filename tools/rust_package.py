@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Package only the verified runtime DLL closure and audit the DLLs actually loaded.
 
 Requires pefile. Source/build material is mandatory for Windows distributions.
@@ -68,7 +69,18 @@ def audit(directory):
         for name in imports(path):
             assert not FORBIDDEN.search(name),name
             assert (directory/name).exists() or name.lower().startswith(('api-ms-win-','ext-ms-win-')) or (pathlib.Path(os.environ['SystemRoot'])/'System32'/name).exists(),name
-    assert (directory/'sources/airplay-windows-source.zip').exists(),'Exact application corresponding source archive missing'
+    source_archive=directory/'sources/airplay-windows-source.zip'
+    assert source_archive.exists(),'Exact application corresponding source archive missing'
+    import zipfile,tomllib
+    assert (directory/'LICENSE').read_text().startswith('Mozilla Public License Version 2.0'), 'Wrong project license in payload'
+    assert (directory/'LICENSES.md').exists() and (directory/'licenses/GPL-3.0.txt').exists(), 'Missing license scope or retained GPL reference notices'
+    with zipfile.ZipFile(source_archive) as source:
+        assert source.read('rust/assets/fonts/OFL.txt')==(directory/'MANROPE_LICENSE.txt').read_bytes(), 'Missing or mismatched embedded font license'
+        assert source.read('LICENSE')==(directory/'LICENSE').read_bytes(),'Payload/source license mismatch'
+        assert tomllib.loads(source.read('Cargo.toml').decode())['package']['license']=='MPL-2.0','Wrong archived manifest license'
+        assert source.read('rust/src/desktop.rs').startswith(b'// SPDX-License-Identifier: MPL-2.0'),'Source predates relicensing'
+        assert source.read('rust/src/playfair.rs').startswith(b'// SPDX-License-Identifier: MIT'),'Third-party license was overwritten'
+
     assert (directory/'sources/native-triplets/x64-windows.cmake').exists(),'Native build triplet missing'
     assert (directory/'sources/ffmpeg-source.zip').exists(),'Corresponding patched FFmpeg source archive missing'
     assert (directory/'sources/native-build/ffmpeg/portfile.cmake').exists(),'Native build materials missing'

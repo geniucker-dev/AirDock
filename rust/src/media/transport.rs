@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use super::{VideoFrame, audio, video};
 use crate::{crypto, rtp, state::Shared};
 use anyhow::{Result, ensure};
@@ -148,6 +149,7 @@ pub fn mirror(
                         let mut cipher = crypto::mirror_cipher(&key, connection);
                         let mut decoder: Option<video::Decoder> = None;
                         let mut decode_epoch = state.generation();
+                        let mut announced_video = None;
                         loop {
                             if state.owner.lock().unwrap().as_ref().map(|o| o.id) != owner_id {
                                 break;
@@ -189,6 +191,7 @@ pub fn mirror(
                                         if decode_epoch != epoch {
                                             d.flush();
                                             decode_epoch = epoch;
+                                            announced_video = None;
                                         }
                                         let source_pts = crate::playback::MediaTime::ntp(
                                             u64::from_le_bytes(header[8..16].try_into()?),
@@ -200,19 +203,19 @@ pub fn mirror(
                                         ) {
                                             Ok(frames) => {
                                                 for frame in frames {
-                                                    {
+                                                    let description = (
+                                                        frame.width(),
+                                                        frame.height(),
+                                                        d.backend(),
+                                                    );
+                                                    if announced_video != Some(description) {
                                                         let mut ui = state.ui.lock().unwrap();
-                                                        let dimensions = format!(
+                                                        ui.dimensions = format!(
                                                             "{} × {}",
-                                                            frame.width(),
-                                                            frame.height()
+                                                            description.0, description.1
                                                         );
-                                                        if ui.dimensions != dimensions {
-                                                            ui.dimensions = dimensions;
-                                                        }
-                                                        if ui.decoder != d.backend() {
-                                                            ui.decoder = d.backend().into();
-                                                        }
+                                                        ui.decoder = description.2.into();
+                                                        announced_video = Some(description);
                                                     }
                                                     let pts=frame.timestamp().map(crate::playback::MediaTime::microseconds).or(source_pts);
                                                     state.publish(VideoFrame {

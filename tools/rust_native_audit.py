@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Audit installed FFmpeg DLL APIs before saving the native build cache.
 The final executable package is audited independently by rust_package.py.
 """

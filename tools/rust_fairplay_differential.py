@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Compare all four modes against the unchanged C implementation, never linked to the application."""
 import argparse, random, subprocess
 

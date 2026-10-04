@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Desktop presentation only. Receiver lifetime is owned by Runtime, outside Iced.
 use crate::{
     config::{self, Settings, WindowPreferences},
@@ -13,8 +14,7 @@ use futures::{StreamExt, channel::mpsc};
 use iced::{
     Element, Length, Subscription, Task, Theme,
     widget::{
-        self, button, checkbox, column, container, pick_list, row, scrollable, slider, text,
-        text_input,
+        self, button, checkbox, container, pick_list, row, scrollable, slider, text, text_input,
     },
     window,
 };
@@ -25,7 +25,10 @@ use std::{
     sync::{Arc, Mutex, atomic::Ordering},
     time::{Duration, Instant},
 };
+mod appearance;
 mod form;
+mod view;
+use appearance::desktop_theme;
 use form::Form;
 
 #[derive(Parser, Clone, Debug)]
@@ -162,6 +165,20 @@ pub fn run() -> Result<()> {
     } else {
         let client = runtime.client.clone();
         let a = args.clone();
+        let graphics_settings = iced::Settings {
+            default_font: appearance::FONT,
+            default_text_size: iced::Pixels(14.),
+            fonts: vec![
+                include_bytes!("../assets/fonts/Manrope-Regular.ttf")
+                    .as_slice()
+                    .into(),
+                include_bytes!("../assets/fonts/Manrope-SemiBold.ttf")
+                    .as_slice()
+                    .into(),
+            ],
+            vsync: settings.vsync,
+            ..Default::default()
+        };
         iced::daemon(
             move || {
                 App::boot(
@@ -174,6 +191,7 @@ pub fn run() -> Result<()> {
             App::update,
             App::view,
         )
+        .settings(graphics_settings)
         .title(|_: &App, _| "AirPlay-Windows".to_owned())
         .theme(|_: &App, _| desktop_theme())
         .subscription(App::subscription)
@@ -221,6 +239,7 @@ enum Message {
     Height(String),
     Fps(String),
     Gpu(String),
+    Diagnostics,
     Audio(crate::audio::DeviceChoice),
     Hardware(bool),
     Hevc(bool),
@@ -351,7 +370,12 @@ struct App {
     cover_source: Arc<Vec<u8>>,
     last_capture: bool,
     last_metrics: u64,
-    metrics_text: String,
+    stats: view::Stats,
+    diagnostics_expanded: bool,
+    ui_revision: u64,
+    sampled_at: Instant,
+    last_decoded: u64,
+    last_bytes: u64,
     #[cfg(windows)]
     tray: Option<crate::platform::tray::Tray>,
     #[cfg(windows)]
@@ -407,7 +431,12 @@ impl App {
             cover_source: Arc::new(Vec::new()),
             last_capture: false,
             last_metrics: 0,
-            metrics_text: String::new(),
+            stats: view::Stats::default(),
+            diagnostics_expanded: false,
+            ui_revision: u64::MAX,
+            sampled_at: Instant::now(),
+            last_decoded: 0,
+            last_bytes: 0,
             #[cfg(windows)]
             tray,
             #[cfg(windows)]
@@ -519,7 +548,11 @@ impl App {
     }
     fn refresh(&mut self) {
         let paused = self.status.paused;
-        self.status = self.client.shared.ui.lock().unwrap().clone();
+        let revision = self.client.shared.ui.revision.load(Ordering::Acquire);
+        if self.ui_revision != revision {
+            self.status = self.client.shared.ui.lock().unwrap().clone();
+            self.ui_revision = revision;
+        }
         if self.status.volume_db > -100. {
             self.last_audible_db = self.status.volume_db;
         }
@@ -631,6 +664,13 @@ impl App {
         }
         match message {
             Message::Opened | Message::Frame | Message::Status => {
+                if matches!(message, Message::Frame) {
+                    self.client
+                        .shared
+                        .metrics
+                        .ui_frame_events
+                        .fetch_add(1, Ordering::Relaxed);
+                }
                 self.refresh();
                 if let Some(task) = self.reveal_video() {
                     return task;
@@ -678,19 +718,7 @@ impl App {
                         crate::platform::startup_error(&self.status.error);
                     }
                 }
-                let n = self.client.shared.metrics.presented.load(Ordering::Relaxed);
-                self.metrics_text = format!(
-                    "{} new video submissions/s · {} decoded · {:.1} ms processing",
-                    n.saturating_sub(self.last_metrics),
-                    self.client.shared.metrics.decoded.load(Ordering::Relaxed),
-                    self.client
-                        .shared
-                        .metrics
-                        .latency_us
-                        .load(Ordering::Relaxed) as f64
-                        / 1000.
-                );
-                self.last_metrics = n;
+                self.sample_metrics();
                 if self
                     .args
                     .exit_after
@@ -1013,6 +1041,12 @@ impl App {
             Message::Width(v) => self.form.width = v,
             Message::Height(v) => self.form.height = v,
             Message::Fps(v) => self.form.fps = v,
+            Message::Diagnostics => {
+                self.diagnostics_expanded = !self.diagnostics_expanded;
+                if self.diagnostics_expanded {
+                    self.sample_metrics();
+                }
+            }
             Message::Gpu(v) => self.form.draft.gpu_preference = v,
             Message::Audio(v) => {
                 if self.form.audio_pending
@@ -1109,398 +1143,89 @@ impl App {
         }
         Task::none()
     }
-    fn view(&self, _: window::Id) -> Element<'_, Message, Theme, Renderer> {
-        // Fullscreen is a presentation mode, never a fullscreen settings shell.
-        // Error feedback overlays the video instead of bringing back the sidebar.
-        if self.fullscreen || (self.focus && self.page == 0 && self.status.error.is_empty()) {
-            let player = container(self.video_view())
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .style(|_| container::Style {
-                    background: Some(iced::Color::BLACK.into()),
-                    ..Default::default()
-                });
-            let mut layers = widget::stack![player];
-            if self.controls_visible {
-                let controls = widget::mouse_area(
-                    container(self.player_controls(true))
-                        .width(Length::Fill)
-                        .max_width(960.)
-                        .height(if self.viewport.width < 740. {
-                            112.
-                        } else {
-                            64.
-                        })
-                        .padding(14)
-                        .style(container::rounded_box),
-                )
-                .on_enter(Message::ControlsHovered(true))
-                .on_exit(Message::ControlsHovered(false));
-                layers = layers.push(
-                    container(column![
-                        widget::space().height(Length::Fill),
-                        container(controls).center_x(Length::Fill)
-                    ])
-                    .padding(16)
-                    .height(Length::Fill)
-                    .width(Length::Fill),
-                );
-            }
-            if !self.status.error.is_empty() {
-                layers = layers.push(
-                    container(
-                        row![
-                            text(&self.status.error).size(13),
-                            button("Dismiss").on_press(Message::ClearError)
-                        ]
-                        .spacing(12),
-                    )
-                    .padding(12)
-                    .style(container::rounded_box),
-                );
-            }
-            return widget::mouse_area(layers)
-                .on_move(|_| Message::Pointer)
-                .interaction(if self.controls_visible {
-                    iced::mouse::Interaction::Idle
-                } else {
-                    iced::mouse::Interaction::Hidden
-                })
-                .into();
-        }
-        let navigation = column![
-            text("AIRPLAY").size(13),
-            text("Windows").size(25),
-            text("RECEIVER").size(11),
-            widget::space().height(24),
-            button("Receive")
-                .on_press(Message::Page(0))
-                .style(if self.page == 0 {
-                    button::primary
-                } else {
-                    button::text
-                })
-                .width(Length::Fill),
-            button("Settings")
-                .on_press(Message::Page(1))
-                .style(if self.page == 1 {
-                    button::primary
-                } else {
-                    button::text
-                })
-                .width(Length::Fill),
-            button("Diagnostics")
-                .on_press(Message::Page(2))
-                .style(if self.page == 2 {
-                    button::primary
-                } else {
-                    button::text
-                })
-                .width(Length::Fill),
-            widget::space().height(Length::Fill),
-            text("Service stays active\nin the system tray").size(12),
-            button("Hide to tray").on_press_maybe(self.tray_available().then_some(Message::Hide)),
-            button("Quit").on_press(Message::Quit)
-        ]
-        .spacing(12)
-        .padding(22)
-        .width(190);
-        let content:Element<'_,Message,Theme,Renderer>=match self.page {
-            1=>self.settings_view(),
-            2=>column![text("Diagnostics").size(28),text(&self.metrics_text),text(format!("Source: {}\nCodec: {}\nDecoder: {}\nDimensions: {}\nAudio: {}",self.status.peer,self.status.codec,self.status.decoder,self.status.dimensions,self.status.audio_status)),text(self.client.shared.metrics.video_colour_label()),text(&self.status.addresses).size(13),text("Iced + wgpu · cpal / WASAPI · FFmpeg LGPL DLL profile"),text("Counters describe new GPU submissions, not measured screen scanout. Hardware performance and end-to-end AV latency require Windows/iPhone acceptance measurements.").size(13),text(format!("Version {}",env!("CARGO_PKG_VERSION")))].spacing(22).padding(28).into(),
-            _=>{
-                let video = self.video_view();
-                column![row![text(if self.status.device.is_empty(){"Your screen, here"}else{&self.status.device}).size(24),widget::space().width(Length::Fill),button("Disconnect").on_press_maybe((!self.status.peer.is_empty()).then_some(Message::Disconnect))].spacing(12),container(video).width(Length::Fill).height(Length::Fill).style(|_|container::Style{background:Some(iced::Color::from_rgb8(9,12,20).into()),border:iced::Border{radius:12.into(),..Default::default()},..Default::default()}),self.player_controls(false)].spacing(20).padding(24).into()
-            }
-        };
-        let mut body = column![content].height(Length::Fill).width(Length::Fill);
-        if !self.status.error.is_empty() {
-            body = body.push(
-                container(
-                    row![
-                        text(&self.status.error).size(13),
-                        button("Dismiss").on_press(Message::ClearError)
-                    ]
-                    .spacing(12),
-                )
-                .padding(12)
-                .style(container::rounded_box),
-            );
-        }
-        container(
-            row![navigation, body]
-                .height(Length::Fill)
-                .width(Length::Fill),
-        )
-        .height(Length::Fill)
-        .into()
-    }
-    fn settings_view(&self) -> Element<'_, Message, Theme, Renderer> {
-        fn field<'a>(
-            label: &'static str,
-            value: &'a str,
-            error: Option<&'a str>,
-            on_input: fn(String) -> Message,
-        ) -> Element<'a, Message, Theme, Renderer> {
-            let mut field = column![
-                text(label).size(13),
-                text_input("", value).on_input(on_input).padding(8)
-            ]
-            .spacing(6)
-            .width(Length::Fill);
-            if let Some(error) = error {
-                field = field.push(
-                    text(error)
-                        .size(12)
-                        .color(iced::Color::from_rgb8(244, 128, 128)),
-                );
-            }
-            field.into()
-        }
-        let f = &self.form;
-        let video = column![
-            text("Video & receiver").size(19),
-            field(
-                "Receiver name",
-                &f.draft.name,
-                f.errors.name.as_deref(),
-                Message::Name
-            ),
-            row![
-                field(
-                    "Width · px",
-                    &f.width,
-                    f.errors.width.as_deref(),
-                    Message::Width
+    fn sample_metrics(&mut self) {
+        let shared = &self.client.shared;
+        let m = &shared.metrics;
+        let seconds = self.sampled_at.elapsed().as_secs_f64().max(0.001);
+        let submitted = m.presented.load(Ordering::Relaxed);
+        let decoded = m.decoded.load(Ordering::Relaxed);
+        let bytes = m.bytes.load(Ordering::Relaxed);
+        if self.window.is_some()
+            && !self.minimized
+            && self.page == 0
+            && !self.fullscreen
+            && !self.focus
+        {
+            let report = shared.snapshot();
+            let ms = |key: &str| {
+                report[key]
+                    .as_u64()
+                    .map(|v| format!("{:.1}", v as f64 / 1000.))
+                    .unwrap_or_else(|| "—".into())
+            };
+            let av = report["estimated_av_offset_us"]
+                .as_i64()
+                .map(|v| format!("{:+.1} ms (estimate)", v as f64 / 1000.))
+                .unwrap_or_else(|| "unavailable".into());
+            let gpu = render::compositor::ADAPTER_NAME.lock().unwrap().clone();
+            self.stats = view::Stats {
+                fps: submitted.saturating_sub(self.last_metrics) as f64 / seconds,
+                processing_ms: (submitted != self.last_metrics)
+                    .then(|| m.latency_us.load(Ordering::Relaxed) as f64 / 1000.),
+                mbps: bytes.saturating_sub(self.last_bytes) as f64 * 8. / seconds / 1_000_000.,
+                dropped: m.replaced.load(Ordering::Relaxed)
+                    + m.schedule_dropped.load(Ordering::Relaxed),
+                video: format!(
+                    "Source: {}\nCodec: {}\nResolution: {}\nDecoder: {}\nRender GPU: {}\nColour: {}\nDecoded: {} ({:.1} fps)",
+                    self.status.peer,
+                    self.status.codec,
+                    self.status.dimensions,
+                    self.status.decoder,
+                    gpu,
+                    m.video_colour_label(),
+                    decoded,
+                    decoded.saturating_sub(self.last_decoded) as f64 / seconds
                 ),
-                field(
-                    "Height · px",
-                    &f.height,
-                    f.errors.height.as_deref(),
-                    Message::Height
+                timing: format!(
+                    "Submitted frames: {submitted}\nProcessing P95 / P99: {} / {} ms\nFrame interval P95 / P99: {} / {} ms\nAV offset: {}\nPending video frames: {}\nReplaced / late / stale: {} / {} / {}\nTotal data: {:.1} MiB",
+                    ms("p95_receive_to_present_us"),
+                    ms("p99_receive_to_present_us"),
+                    ms("p95_new_submission_interval_us"),
+                    ms("p99_new_submission_interval_us"),
+                    av,
+                    report["pending_scheduled_frames"],
+                    m.replaced.load(Ordering::Relaxed),
+                    m.schedule_dropped.load(Ordering::Relaxed),
+                    m.stale_dropped.load(Ordering::Relaxed),
+                    bytes as f64 / 1_048_576.
                 ),
-                field(
-                    "Frame rate · fps",
-                    &f.fps,
-                    f.errors.fps.as_deref(),
-                    Message::Fps
-                )
-            ]
-            .spacing(12),
-            checkbox(f.draft.hardware_decode)
-                .label("Hardware decoding")
-                .on_toggle(Message::Hardware),
-            checkbox(f.draft.hevc_enabled)
-                .label("Advertise HEVC")
-                .on_toggle(Message::Hevc),
-            checkbox(f.draft.hls_enabled)
-                .label("HLS / FCUP playback")
-                .on_toggle(Message::Hls),
-            checkbox(f.draft.vsync)
-                .label("VSync · restart required")
-                .on_toggle(Message::Vsync),
-            text("Render adapter · restart required").size(13),
-            pick_list(
-                vec![
-                    "balanced".to_owned(),
-                    "low-power".to_owned(),
-                    "high-performance".to_owned()
-                ],
-                Some(f.draft.gpu_preference.clone()),
-                Message::Gpu
-            ),
-        ]
-        .spacing(14);
-        let audio = column![
-            text("Audio output").size(19),
-            text("Choosing a device applies and saves immediately. Other edits remain unsaved.")
-                .size(12),
-            pick_list(
-                self.devices.clone(),
-                self.devices
-                    .iter()
-                    .find(|d| d.id == f.draft.audio_device)
-                    .cloned(),
-                Message::Audio
-            )
-            .placeholder("Saved output unavailable")
-            .width(Length::Fill),
-            text(if self.status.audio_status.is_empty() {
-                "Ready when audio starts"
-            } else {
-                &self.status.audio_status
-            })
-            .size(12)
-        ]
-        .spacing(12);
-        let desktop = column![
-            text("Desktop behaviour").size(19),
-            checkbox(f.draft.close_to_tray)
-                .label("Close window to tray")
-                .on_toggle(Message::CloseTray),
-            text(
-                "When off, closing minimizes to the taskbar. Receiving continues; use Quit to exit."
-            )
-            .size(12),
-            checkbox(f.draft.minimize_to_tray)
-                .label("Minimize to tray")
-                .on_toggle(Message::MinimizeTray),
-            checkbox(f.draft.start_hidden)
-                .label("Start in tray")
-                .on_toggle(Message::StartHidden),
-            checkbox(f.draft.autostart)
-                .label("Start with Windows")
-                .on_toggle(Message::Autostart),
-            text("Window size and presentation mode are remembered automatically.").size(12)
-        ]
-        .spacing(12);
-        let form = column![
-            container(video).padding(18).style(container::rounded_box),
-            container(audio).padding(18).style(container::rounded_box),
-            container(desktop).padding(18).style(container::rounded_box)
-        ]
-        .spacing(16);
-        let busy = f.pending.is_some() || f.audio_pending;
-        let state = if busy {
-            "Saving…"
-        } else if f.dirty() {
-            "Unsaved changes"
-        } else {
-            "All changes saved"
-        };
-        column![text("Receiver settings").size(28),text("Save video and desktop changes below. Network/decoder: next connection; GPU/VSync: restart.").size(12),
-            scrollable(form).height(Length::Fill),
-            text(if f.feedback.is_empty() { " " } else { &f.feedback }).size(13),
-            row![button(if busy{"Saving…"}else{"Save settings"}).on_press_maybe((!busy && f.dirty()).then_some(Message::Save)),button("Reset form").style(button::secondary).on_press_maybe((!busy).then_some(Message::Reset)),widget::space().width(Length::Fill),text(state).size(12)].spacing(12).align_y(iced::Alignment::Center)
-        ].spacing(14).padding(28).height(Length::Fill).into()
+                audio: format!(
+                    "{}\nOutput latency: {} ms\nUnderruns: {}\nRecovered packets: {}\nPacket errors: {}",
+                    if self.status.audio_status.is_empty() {
+                        "Waiting for audio"
+                    } else {
+                        &self.status.audio_status
+                    },
+                    ms("audio_output_latency_us"),
+                    report["audio_underruns"],
+                    m.audio_recovered.load(Ordering::Relaxed),
+                    m.audio_errors.load(Ordering::Relaxed)
+                ),
+                network: format!(
+                    "{}\nModel: {}. Stage: {:.0} × {:.0}. HLS: FFmpeg. Version {}.",
+                    self.status.addresses,
+                    self.status.model,
+                    self.viewport.width,
+                    self.viewport.height,
+                    env!("CARGO_PKG_VERSION")
+                ),
+            };
+        }
+        self.last_metrics = submitted;
+        self.last_decoded = decoded;
+        self.last_bytes = bytes;
+        self.sampled_at = Instant::now();
     }
-    fn player_controls(&self, presentation: bool) -> Element<'_, Message, Theme, Renderer> {
-        let available_width = if presentation {
-            (self.viewport.width - 32.).min(960.) - 28.
-        } else {
-            self.viewport.width - 260.
-        };
-        let actions = row![
-            button(if presentation {
-                if self.fullscreen {
-                    "Exit fullscreen"
-                } else {
-                    "Show controls"
-                }
-            } else {
-                "Fullscreen · F11"
-            })
-            .style(button::secondary)
-            .on_press(if presentation {
-                Message::LeavePresentation
-            } else {
-                Message::Fullscreen
-            }),
-            button(if self.crop { "Fit" } else { "Fill / crop" })
-                .style(button::secondary)
-                .on_press(Message::Crop),
-            widget::space().width(Length::Fill),
-            text(self.client.shared.metrics.video_colour_label()).size(12)
-        ]
-        .spacing(12)
-        .align_y(iced::Alignment::Center);
-        let volume = row![
-            button(if self.status.volume_db <= -100. {
-                "Unmute"
-            } else {
-                "Mute"
-            })
-            .style(button::secondary)
-            .on_press(Message::Mute),
-            slider(
-                -60.0..=0.,
-                self.status.volume_db.clamp(-60., 0.),
-                Message::Volume
-            )
-            .width(Length::Fill),
-            text(if self.status.volume_db <= -100. {
-                "Muted".into()
-            } else {
-                format!("{:.0} dB", self.status.volume_db)
-            })
-            .size(12)
-            .width(52)
-        ]
-        .spacing(12)
-        .align_y(iced::Alignment::Center);
-        if available_width < 680. {
-            column![actions, volume].spacing(12).into()
-        } else {
-            row![actions, container(volume).width(260)]
-                .spacing(16)
-                .align_y(iced::Alignment::Center)
-                .into()
-        }
-    }
-    fn video_view(&self) -> Element<'_, Message, Theme, Renderer> {
-        if let Some(frame) = &self.frame {
-            if render::compositor::STATUS.load(Ordering::Acquire) == 3 {
-                return container(text("Video requires a compatible GPU").size(22))
-                    .center(Length::Fill)
-                    .into();
-            }
-            return widget::shader(render::Video {
-                frame: frame.clone(),
-                shared: self.client.shared.clone(),
-                crop: self.crop,
-            })
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into();
-        }
-        if self.fullscreen || (self.focus && self.page == 0) {
-            return container(text(if self.fullscreen {
-                "Waiting for video · Esc or F11 to leave fullscreen"
-            } else {
-                "Waiting for video · Ctrl+H to show controls"
-            }))
-            .center(Length::Fill)
-            .into();
-        }
-        let title = if self.status.peer.is_empty() {
-            "Ready to receive"
-        } else if self.status.kind == "Audio" {
-            "Audio playback"
-        } else {
-            "Waiting for video"
-        };
-        let mut ready = column![text(title).size(29), text(&self.form.saved.name).size(20),
-            text(if self.status.peer.is_empty() {
-                "Open Screen Mirroring on your iPhone or iPad.\nConnect through your LAN or Windows mobile hotspot."
-            } else { &self.status.title }).size(14)]
-            .spacing(16).align_x(iced::Alignment::Center);
-        if let Some(cover) = &self.cover {
-            ready = ready.push(widget::image(cover.clone()).width(180).height(180));
-        }
-        if !self.status.artist.is_empty() {
-            ready = ready.push(text(&self.status.artist));
-        }
-        container(ready).center(Length::Fill).into()
-    }
-}
-
-fn desktop_theme() -> Theme {
-    static THEME: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
-    THEME
-        .get_or_init(|| {
-            Theme::custom(
-                "AirPlay",
-                iced::theme::Palette {
-                    background: iced::Color::from_rgb8(17, 21, 31),
-                    text: iced::Color::from_rgb8(221, 228, 244),
-                    primary: iced::Color::from_rgb8(116, 145, 250),
-                    success: iced::Color::from_rgb8(72, 197, 144),
-                    warning: iced::Color::from_rgb8(228, 180, 92),
-                    danger: iced::Color::from_rgb8(233, 121, 144),
-                },
-            )
-        })
-        .clone()
 }
 
 #[cfg(test)]

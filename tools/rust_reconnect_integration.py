@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Independent encrypted mirroring across session and TCP reconnects."""
 import argparse
 import json

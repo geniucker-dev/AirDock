@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Ship verified license texts for the exact Windows Cargo dependency closure.
 
 Some published crates omit their workspace's license files. Supplemental texts

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Application-owned compositor using Iced's public renderer/engine interfaces.
 //! One device serves both UI and video; no second video window or swapchain.
 use iced_wgpu::{
@@ -14,10 +15,17 @@ use std::{
 };
 pub static STATUS: AtomicU8 = AtomicU8::new(0); // 1 GPU, 2 software GPU, 3 software UI only, 4 recovering, 5 failed
 pub static PREFERENCE: AtomicU8 = AtomicU8::new(0); // balanced, low power, high performance
+pub static ADAPTER_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 pub static DEVICE: AtomicU32 = AtomicU32::new(0);
 pub static VENDOR: AtomicU32 = AtomicU32::new(0);
 pub type Renderer = iced_renderer::fallback::Renderer<GpuRenderer, iced_tiny_skia::Renderer>;
-pub struct GpuRenderer(pub iced_wgpu::Renderer);
+pub struct GpuRenderer(
+    pub iced_wgpu::Renderer,
+    // Iced batches weak paragraph references. Keep the submitted text alive
+    // until reset: a newer UI layout can otherwise invalidate a pending
+    // screenshot/refresh before the old renderer batch is consumed.
+    Vec<<iced_wgpu::Renderer as core::text::Renderer>::Paragraph>,
+);
 impl std::fmt::Debug for GpuRenderer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("AirPlay shared wgpu renderer")
@@ -40,6 +48,7 @@ impl core::Renderer for GpuRenderer {
         self.0.fill_quad(q, b)
     }
     fn reset(&mut self, r: core::Rectangle) {
+        self.1.clear();
         self.0.reset(r)
     }
     fn allocate_image(
@@ -76,6 +85,7 @@ impl core::text::Renderer for GpuRenderer {
         c: core::Color,
         r: core::Rectangle,
     ) {
+        self.1.push(p.clone());
         self.0.fill_paragraph(p, pos, c, r)
     }
     fn fill_editor(
@@ -135,10 +145,12 @@ pub struct GpuCompositor {
     retries: u8,
     test_loss: Option<Instant>,
 }
-fn score(info: &wgpu::AdapterInfo) -> u8 {
+fn adapter_rank(preference: u8, kind: wgpu::DeviceType, display_match: bool) -> u8 {
     use wgpu::DeviceType::*;
-    match (PREFERENCE.load(Ordering::Relaxed), info.device_type) {
-        (2, DiscreteGpu) => 0,
+    match (preference, kind) {
+        // Balanced follows the display, then uses integrated as an economical fallback.
+        (0, IntegratedGpu | DiscreteGpu) if display_match => 0,
+        (2, DiscreteGpu) | (1, IntegratedGpu) => 0,
         (_, IntegratedGpu) => 1,
         (_, DiscreteGpu) => 2,
         (_, VirtualGpu) => 3,
@@ -199,14 +211,18 @@ impl graphics::Compositor for GpuCompositor {
             if backend.is_some_and(|b|b!="wgpu"){return Err("Requested software UI renderer".to_owned())}
             let backends=wgpu::Backends::from_env().unwrap_or(if cfg!(windows){wgpu::Backends::DX12|wgpu::Backends::VULKAN}else{wgpu::Backends::VULKAN|wgpu::Backends::GL});
             let instance=wgpu::Instance::new(&wgpu::InstanceDescriptor{backends,..Default::default()});
+            #[cfg(windows)]
+            let display_adapter=crate::platform::window_adapter(&window);
+            #[cfg(not(windows))]
+            let display_adapter=None::<(u32,u32)>;
             let surface=instance.create_surface(window).map_err(|e|e.to_string())?;
-            let mut adapters=instance.enumerate_adapters(backends);adapters.retain(|a|a.is_surface_supported(&surface));adapters.sort_by_key(|a|score(&a.get_info()));
+            let mut adapters=instance.enumerate_adapters(backends);adapters.retain(|a|a.is_surface_supported(&surface));adapters.sort_by_key(|a|{let i=a.get_info();adapter_rank(PREFERENCE.load(Ordering::Relaxed),i.device_type,display_adapter==Some((i.vendor,i.device)))});
             for adapter in adapters {
                 let capabilities=surface.get_capabilities(&adapter);
                 let format=capabilities.formats.iter().copied().find(|f|f.is_srgb()==graphics::color::GAMMA_CORRECTION).or(capabilities.formats.first().copied());
                 let Some(format)=format else{continue};let lost=Arc::new(AtomicBool::new(false));
                 match Self::engine(&adapter,format,settings,shell.clone(),lost.clone()).await {
-                    Ok((device,engine))=>{let info=adapter.get_info();VENDOR.store(info.vendor,Ordering::Release);DEVICE.store(info.device,Ordering::Release);STATUS.store(if info.device_type==wgpu::DeviceType::Cpu{2}else{1},Ordering::Release);tracing::info!("Render adapter: {} ({:?}, vendor {:x})",info.name,info.backend,info.vendor);return Ok(Self{instance,adapter,device,engine,format,settings,shell,lost,last_retry:Instant::now()-Duration::from_secs(5),retries:0,test_loss:std::env::var("AIRPLAY_GPU_TEST_LOSS_AFTER_MS").ok().and_then(|s|s.parse::<u64>().ok()).map(|ms|Instant::now()+Duration::from_millis(ms))});},
+                    Ok((device,engine))=>{let info=adapter.get_info();*ADAPTER_NAME.lock().unwrap()=format!("{} ({:?})",info.name,info.backend);VENDOR.store(info.vendor,Ordering::Release);DEVICE.store(info.device,Ordering::Release);STATUS.store(if info.device_type==wgpu::DeviceType::Cpu{2}else{1},Ordering::Release);tracing::info!("Render adapter: {} ({:?}, vendor {:x})",info.name,info.backend,info.vendor);return Ok(Self{instance,adapter,device,engine,format,settings,shell,lost,last_retry:Instant::now()-Duration::from_secs(5),retries:0,test_loss:std::env::var("AIRPLAY_GPU_TEST_LOSS_AFTER_MS").ok().and_then(|s|s.parse::<u64>().ok()).map(|ms|Instant::now()+Duration::from_millis(ms))});},
                     Err(e)=>tracing::warn!("GPU initialization failed on {}: {e}",adapter.get_info().name),
                 }
             }
@@ -221,11 +237,14 @@ impl graphics::Compositor for GpuCompositor {
         })
     }
     fn create_renderer(&self) -> GpuRenderer {
-        GpuRenderer(iced_wgpu::Renderer::new(
-            self.engine.clone(),
-            self.settings.default_font,
-            self.settings.default_text_size,
-        ))
+        GpuRenderer(
+            iced_wgpu::Renderer::new(
+                self.engine.clone(),
+                self.settings.default_font,
+                self.settings.default_text_size,
+            ),
+            Vec::new(),
+        )
     }
     fn create_surface<W: compositor::Window + Clone>(
         &mut self,
@@ -261,7 +280,12 @@ impl graphics::Compositor for GpuCompositor {
                 width,
                 height,
                 present_mode: if self.settings.vsync {
-                    wgpu::PresentMode::AutoVsync
+                    // Mailbox retains the latest submitted frame instead of FIFO backlog.
+                    if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+                        wgpu::PresentMode::Mailbox
+                    } else {
+                        wgpu::PresentMode::AutoVsync
+                    }
                 } else {
                     wgpu::PresentMode::AutoNoVsync
                 },
@@ -353,7 +377,7 @@ impl core::renderer::Headless for GpuRenderer {
     async fn new(font: core::Font, size: core::Pixels, backend: Option<&str>) -> Option<Self> {
         <iced_wgpu::Renderer as core::renderer::Headless>::new(font, size, backend)
             .await
-            .map(Self)
+            .map(|renderer| Self(renderer, Vec::new()))
     }
     fn name(&self) -> String {
         self.0.name()
@@ -365,5 +389,19 @@ impl core::renderer::Headless for GpuRenderer {
             scale,
             color,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn balanced_follows_direct_display_and_explicit_preferences_win() {
+        use wgpu::DeviceType::*;
+        assert!(adapter_rank(0, DiscreteGpu, true) < adapter_rank(0, IntegratedGpu, false));
+        assert!(adapter_rank(0, IntegratedGpu, true) < adapter_rank(0, DiscreteGpu, false));
+        assert!(adapter_rank(1, IntegratedGpu, false) < adapter_rank(1, DiscreteGpu, true));
+        assert!(adapter_rank(2, DiscreteGpu, false) < adapter_rank(2, IntegratedGpu, true));
+        assert!(adapter_rank(0, IntegratedGpu, false) < adapter_rank(0, Cpu, true));
     }
 }

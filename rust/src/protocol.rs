@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use anyhow::{Result, bail};
 use plist::{Dictionary, Value};
 use std::{

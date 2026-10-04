@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Verify receiving outlives UI presentation, and hidden/settings states stop video uploads.
 Xvfb/software GPU only; this does not certify the Windows tray or physical power.
 """
@@ -49,7 +50,7 @@ def main():
                 xdo('windowfocus', window)
                 time.sleep(.2)
                 if state == 'settings':
-                    xdo('mousemove', '--window', window, 100, 215)
+                    xdo('mousemove', '--window', window, 402, 34)
                     xdo('click', 1)
                 if state in ('closed', 'restored'):
                     xdo('key', 'alt+F4')
@@ -79,10 +80,14 @@ def main():
             assert record['uploaded_frames'] == 0 and record['presented_frames'] == 0, record
         else: # A new video session restores a hidden/minimized player.
             assert record['uploaded_frames'] >= 10 and record['presented_frames'] >= 10, record
+        if state == 'receive':
+            assert record['ui_frame_events'] >= 10, record
+            assert record['receiver_view_builds'] < record['ui_frame_events'], record
         if state == 'software':
             assert 'Video unavailable: no compatible GPU' in (directory / 'receiver.log').read_text()
         results[state] = {'decoded': record['decoded_frames'], 'uploads': record['uploaded_frames'],
-                          'submissions': record['presented_frames'], 'idle_cpu_seconds_over_half_second': idle_cpu}
+                          'submissions': record['presented_frames'], 'idle_cpu_seconds_over_half_second': idle_cpu,
+                          'ui_frame_events': record['ui_frame_events'], 'receiver_view_builds': record['receiver_view_builds']}
     result = {'cases': results, 'windows_tray_hardware_acceptance': 'pending', 'physical_power_comparison': 'pending'}
     (output / 'results.json').write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))

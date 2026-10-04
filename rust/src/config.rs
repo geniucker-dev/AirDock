@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

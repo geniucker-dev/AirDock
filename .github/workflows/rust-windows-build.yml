@@ -132,7 +132,9 @@ jobs:
           if (-not $crt) { throw 'CRT directory missing' }
           python tools/rust_package.py --binary target/release/airplay-windows.exe --native "$env:RUST_NATIVE_ROOT/x64-windows/bin" --crt "$($crt.FullName)" --destination dist-rust
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item LICENSE,README.md,THIRD_PARTY_NOTICES.md,Cargo.lock dist-rust/
+          Copy-Item LICENSE,LICENSES.md,README.md,THIRD_PARTY_NOTICES.md,Cargo.lock dist-rust/
+          Copy-Item -Recurse licenses dist-rust/
+          Copy-Item rust/assets/fonts/OFL.txt dist-rust/MANROPE_LICENSE.txt
           New-Item -ItemType Directory -Force dist-rust/docs,dist-rust/sources | Out-Null
           Copy-Item docs/RUST*.md,docs/CPP_REFERENCE_README.md dist-rust/docs/
           Copy-Item rust/src/playfair_data/AIRFRY-LICENSE.txt dist-rust/

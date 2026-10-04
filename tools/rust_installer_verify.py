@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Windows installation, payload integrity, upgrade, clean-path playback and uninstall.
 Only CI's temporary installation is removed; real config and registry values are backed up.
 """

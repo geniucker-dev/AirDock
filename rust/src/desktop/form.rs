@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Settings drafts never mutate live receiver or independently saved window preferences.
 use crate::config::{Settings, WindowPreferences};
 

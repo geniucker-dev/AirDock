@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Read exact ABI version constants from the bundled patched FFmpeg source."""
 import re
 import zipfile

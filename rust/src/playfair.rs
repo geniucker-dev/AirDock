@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! PlayFair stream-key derivation — faithful port of doubletake's playfair.go.
 //! Tables and constants are embedded from src/playfair_data/ (little-endian dumps).
 //! All u32/u8 arithmetic uses wrapping semantics to match Go's overflow behavior.

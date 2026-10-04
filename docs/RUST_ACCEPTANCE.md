@@ -3,7 +3,8 @@
 Frozen references: C++ `562120e4a6c85da1ec33bca88a6f438db91b8545` and
 Rust/Slint `43bcb0ca8a7d659159290ff81bfa65ba3d627b9d`.
 Recording is deliberately removed from the migration scope and comparisons.
-The project license remains unchanged pending a separate source relationship review.
+Project-owned Rust code is MPL-2.0; retained third-party/test references keep their
+licenses. See LICENSES.md and RUST_SOURCE_ORIGIN.md.
 
 ## Automatic gates
 

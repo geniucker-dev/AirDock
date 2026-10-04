@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Offscreen checks execute the production YUV shader, including sRGB target handling.
 use airplay_windows::render::VideoPipeline;
 use anyhow::{Result, ensure};

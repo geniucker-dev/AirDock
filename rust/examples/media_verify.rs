@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use anyhow::{Result, ensure};
 use ffmpeg_next as ffmpeg;
 fn main() -> Result<()> {

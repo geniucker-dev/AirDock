@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::{
     collections::VecDeque,
     sync::{
@@ -8,6 +9,8 @@ use std::{
 #[derive(Default)]
 pub struct Metrics {
     pub decoded: AtomicU64,
+    pub receiver_view_builds: AtomicU64,
+    pub ui_frame_events: AtomicU64,
     pub video_depth: AtomicU32,
     pub video_colour_mode: AtomicU32,
     pub hdr_uploaded: AtomicU64,

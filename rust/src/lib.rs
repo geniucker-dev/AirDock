@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 pub mod config;
 pub mod crypto;
 pub mod desktop;

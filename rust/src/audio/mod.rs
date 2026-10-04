@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Audio device ownership and sample conversion live on the output control thread.
 pub mod ring;
 use crate::{playback::AudioClock, state::Shared};
@@ -136,8 +137,8 @@ impl Sink {
                             Ok(o) => {
                                 if let Some(status) = &status {
                                     status.lock().unwrap().audio_status = format!(
-                                        "{} Hz · {} channels",
-                                        o.config.sample_rate, o.config.channels
+                                        "{} · {} Hz · {} channels",
+                                        o.device_name, o.config.sample_rate, o.config.channels
                                     );
                                 }
                                 tracing::info!(
@@ -330,6 +331,7 @@ impl Drop for Sink {
 struct Output {
     _stream: cpal::Stream,
     config: StreamConfig,
+    device_name: String,
     producer: ring::Producer,
     epoch: Arc<AtomicU64>,
     failed: Arc<AtomicBool>,
@@ -356,6 +358,7 @@ impl Output {
                 .find(|d| d.id().is_ok_and(|id| id.to_string() == name))
                 .context("Selected audio device is disconnected")?
         };
+        let device_name = device.description()?.name().to_owned();
         let supported = device.default_output_config()?;
         let format = supported.sample_format();
         let config: StreamConfig = supported.into();
@@ -391,6 +394,7 @@ impl Output {
         Ok(Self {
             _stream: stream,
             config,
+            device_name,
             producer,
             epoch,
             failed,

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Independent wire/media checks; no hardware parity claim is made by this test."""
 import re
 import argparse,hashlib,importlib.util,json,os,pathlib,plistlib,socket,struct,subprocess,sys,time

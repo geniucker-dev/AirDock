@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Windows preflight for installer callbacks, before expensive native/Rust builds.
 
 Uses a non-executable fixture payload. Full installation/playback remains a

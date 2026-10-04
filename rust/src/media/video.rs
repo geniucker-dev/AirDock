@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use super::audio::extradata;
 use anyhow::{Context, Result, bail, ensure};
 use ffmpeg_next::{self as ffmpeg, codec, frame};

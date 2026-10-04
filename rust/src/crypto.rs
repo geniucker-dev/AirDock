@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use aes::Aes128;
 use anyhow::{Result, bail};
 use ctr::cipher::{KeyIvInit, StreamCipher};

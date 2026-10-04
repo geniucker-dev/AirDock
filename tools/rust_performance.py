@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Validate same-hardware measured C++, Slint and Iced acceptance data.
 Never infer display frames or AV synchronization from renderer submissions.
 """

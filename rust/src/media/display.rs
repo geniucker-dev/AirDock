@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Validated 8/10-bit YUV plane descriptions. No CPU RGBA path.
 use anyhow::{Result, bail, ensure};
 use ffmpeg_next::{self as ffmpeg, format::Pixel, frame::Video};

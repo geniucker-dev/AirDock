@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use anyhow::Result;
 use std::path::Path;
 
@@ -229,9 +230,13 @@ pub mod tray {
 #[cfg(windows)]
 pub fn decoder_adapter(vendor: u32, device: u32) -> Option<String> {
     use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
-    if vendor == 0 {
-        return None;
-    }
+    // A hidden-start receiver can decode before Iced has created a GPU device.
+    // Choose the same policy up front rather than accepting DXGI adapter zero.
+    let (vendor, device) = if vendor == 0 {
+        startup_adapter()?
+    } else {
+        (vendor, device)
+    };
     unsafe {
         let factory = CreateDXGIFactory1::<IDXGIFactory1>().ok()?;
         for index in 0..32 {
@@ -293,4 +298,78 @@ pub fn install_exit_handlers() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Physical adapter driving the monitor nearest this HWND. Surface support alone
+/// also admits hybrid adapters that must copy their output to the display GPU.
+#[cfg(windows)]
+pub fn window_adapter(window: &impl iced_wgpu::graphics::compositor::Window) -> Option<(u32, u32)> {
+    use iced_wgpu::wgpu::rwh::RawWindowHandle;
+    use windows::Win32::Foundation::HWND;
+    let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+    monitor_adapter(HWND(handle.hwnd.get() as *mut _))
+}
+#[cfg(windows)]
+fn monitor_adapter(hwnd: windows::Win32::Foundation::HWND) -> Option<(u32, u32)> {
+    use windows::Win32::Graphics::{
+        Dxgi::{CreateDXGIFactory1, IDXGIFactory1},
+        Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow},
+    };
+    unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let factory = CreateDXGIFactory1::<IDXGIFactory1>().ok()?;
+        for index in 0..32 {
+            let Ok(adapter) = factory.EnumAdapters1(index) else {
+                break;
+            };
+            let Ok(description) = adapter.GetDesc1() else {
+                continue;
+            };
+            for output_index in 0..32 {
+                let Ok(output) = adapter.EnumOutputs(output_index) else {
+                    break;
+                };
+                if output
+                    .GetDesc()
+                    .is_ok_and(|d| d.AttachedToDesktop.as_bool() && d.Monitor == monitor)
+                {
+                    return Some((description.VendorId, description.DeviceId));
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn startup_adapter() -> Option<(u32, u32)> {
+    use windows::Win32::{
+        Foundation::HWND,
+        Graphics::Dxgi::{
+            CreateDXGIFactory1, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+            DXGI_GPU_PREFERENCE_MINIMUM_POWER, IDXGIAdapter1, IDXGIFactory6,
+        },
+    };
+    let preference =
+        crate::render::compositor::PREFERENCE.load(std::sync::atomic::Ordering::Relaxed);
+    if preference == 0 {
+        return monitor_adapter(HWND(std::ptr::null_mut()));
+    }
+    unsafe {
+        let factory = CreateDXGIFactory1::<IDXGIFactory6>().ok()?;
+        let adapter = factory
+            .EnumAdapterByGpuPreference::<IDXGIAdapter1>(
+                0,
+                if preference == 2 {
+                    DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE
+                } else {
+                    DXGI_GPU_PREFERENCE_MINIMUM_POWER
+                },
+            )
+            .ok()?;
+        let description = adapter.GetDesc1().ok()?;
+        Some((description.VendorId, description.DeviceId))
+    }
 }

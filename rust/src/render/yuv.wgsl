@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 struct Uniforms {
     r:vec4<f32>,g:vec4<f32>,b:vec4<f32>,options:vec4<f32>,crop:vec4<f32>,
     gamut_r:vec4<f32>,gamut_g:vec4<f32>,gamut_b:vec4<f32>,hdr:vec4<f32>

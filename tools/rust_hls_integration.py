@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Independent synthetic iOS FCUP sender and actual FFmpeg HLS playback."""
 import argparse
 import json

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use crate::{
     media::{VideoFrame, audio},
     protocol::{Reader, Response, dict, integer, string, uint},
@@ -239,6 +240,11 @@ impl Hls {
             return Ok(());
         }
         ensure!(bytes.len() <= 32 * 1024 * 1024, "HLS response too large");
+        self.inner
+            .shared
+            .metrics
+            .bytes
+            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
         state.1.put(
             url.into(),
             Reply {
@@ -458,10 +464,10 @@ fn serve(mut stream: TcpStream, inner: &Inner) -> Result<()> {
     let mut reply = if url.starts_with("mlhls:") {
         inner.fetch(&url, false)?
     } else {
-        http_fetch(&url, req.header("range"))?
+        http_fetch(&url, req.header("range"), &inner.shared.metrics)?
     };
     if !reply.redirect.is_empty() {
-        reply = http_fetch(&reply.redirect, req.header("range"))?;
+        reply = http_fetch(&reply.redirect, req.header("range"), &inner.shared.metrics)?;
     }
     let playlist = reply.bytes.starts_with(b"#EXTM3U");
     if playlist {
@@ -500,7 +506,7 @@ fn serve(mut stream: TcpStream, inner: &Inner) -> Result<()> {
         )
         .write(&req, &mut stream)
 }
-fn http_fetch(url: &str, range: &str) -> Result<Reply> {
+fn http_fetch(url: &str, range: &str, metrics: &crate::telemetry::Metrics) -> Result<Reply> {
     ensure!(
         matches!(url::Url::parse(url)?.scheme(), "http" | "https"),
         "Unsupported upstream URL"
@@ -528,6 +534,9 @@ fn http_fetch(url: &str, range: &str) -> Result<Reply> {
         .take(64 * 1024 * 1024 + 1)
         .read_to_end(&mut bytes)?;
     ensure!(bytes.len() <= 64 * 1024 * 1024, "HLS resource too large");
+    metrics
+        .bytes
+        .fetch_add(bytes.len() as u64, Ordering::Relaxed);
     Ok(Reply {
         bytes,
         redirect: String::new(),

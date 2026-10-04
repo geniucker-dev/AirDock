@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Encrypted video fills the fullscreen player; hidden sessions reveal only once.
 Xvfb/software GPU verification, not physical Windows tray or display acceptance.
 """
@@ -64,7 +65,7 @@ def main():
                 xdo('windowfocus', window)
                 time.sleep(.3)
                 if case == 'fullscreen-settings':
-                    xdo('mousemove', '--window', window, 100, 215)
+                    xdo('mousemove', '--window', window, 402, 34)
                     xdo('click', 1)
                 if case.startswith('fullscreen'):
                     xdo('key', 'F11')

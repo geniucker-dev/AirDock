@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use crate::{config::Settings, media::VideoFrame};
 #[cfg(test)]
 use std::sync::Mutex;
@@ -94,7 +95,9 @@ impl Shared {
             .collect::<Vec<_>>();
         intervals.sort_unstable();
         serde_json::json!({"elapsed_seconds":self.started.elapsed().as_secs_f64(),
-            "decoded_frames":m.decoded.load(Ordering::Relaxed),"presented_frames":m.presented.load(Ordering::Relaxed),
+            "decoded_frames":m.decoded.load(Ordering::Relaxed),
+            "receiver_view_builds":m.receiver_view_builds.load(Ordering::Relaxed),"ui_frame_events":m.ui_frame_events.load(Ordering::Relaxed),
+            "render_adapter":crate::render::compositor::ADAPTER_NAME.lock().unwrap().clone(),"presented_frames":m.presented.load(Ordering::Relaxed),
             "replaced_frames":m.replaced.load(Ordering::Relaxed),"last_receive_to_present_us":m.latency_us.load(Ordering::Relaxed),
             "audio_packets":m.audio_packets.load(Ordering::Relaxed),"audio_recovered":m.audio_recovered.load(Ordering::Relaxed),
             "audio_errors":m.audio_errors.load(Ordering::Relaxed),"schedule_dropped":m.schedule_dropped.load(Ordering::Relaxed),"stale_dropped":m.stale_dropped.load(Ordering::Relaxed),

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use anyhow::{Result, bail, ensure};
 use ffmpeg_next::{
     self as ffmpeg, ChannelLayout, codec,

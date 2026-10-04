@@ -1,9 +1,14 @@
 # Third-party notices for the Iced edition
 
-The application remains GPL-3.0-only. Replacing UI/audio dependencies does not
-by itself change the license or establish independence from historical sources.
-A separate source relationship review is required before any license change.
+Project-owned Iced/Rust source is MPL-2.0; see LICENSES.md and
+[the source relationship review](docs/RUST_SOURCE_ORIGIN.md). Third-party material
+keeps its original license. Historical C++ GPL sources are test/reference material
+and are not application runtime dependencies.
 
+- **Manrope**: Copyright 2018 The Manrope Project Authors, SIL OFL 1.1.
+  https://github.com/sharanda/manrope. The application embeds static 400/600
+  faces derived from the Google Fonts variable font. Original font, OFL and
+  reproduction tool accompany source; MANROPE_LICENSE.txt accompanies binaries.
 - **Iced** (0.14): MIT. https://github.com/iced-rs/iced
 - **wgpu** (27): MIT OR Apache-2.0. https://github.com/gfx-rs/wgpu
 - **cpal** (0.18): Apache-2.0. https://github.com/RustAudio/cpal
@@ -24,9 +29,10 @@ A separate source relationship review is required before any license change.
   distributions as INSTALLER_LICENSE.txt. https://jrsoftware.org/isinfo.php
 - **Rust dependencies**: Cargo.lock pins versions. Distribution artifacts include
   source license texts and SPDX/repository metadata in rust-licenses/index.json.
-- **Rust PlayFair implementation/data**: existing port derived from nored/airfry;
-  existing license and notices remain in rust/src/playfair_data/. This migration
-  does not make new claims about its authorization or provenance.
+- **Rust PlayFair implementation/data**: MIT as published by nored/airfry;
+  its license and attribution remain in rust/src/playfair_data/. The port retains
+  MIT rather than being relabeled MPL. FairPlay authorization-chain analysis is
+  outside this change.
 - **Test fixtures**: synthetic media, generated independently; no device captures
   or copyrighted media. See rust/tests/fixtures/README.md. External fixture
   generators/encoders and the GPL C differential oracle are test tools and are
@@ -45,9 +51,9 @@ components listed below. Each entry states the upstream source, the
 license under which it is redistributed in this repo, and any caveat
 specific to the use we make of it.
 
-The project itself (everything under `src/`, `tools/`, this file, the
+The historical C++ project (everything under `src/`, `tools/`, this file, the
 `CMakeLists.txt` and the `README.md`) is released under the
-**GNU General Public License v3.0** — see [`LICENSE`](LICENSE).
+**GNU General Public License v3.0** — see [the preserved license](licenses/GPL-3.0.txt).
 
 ---
 

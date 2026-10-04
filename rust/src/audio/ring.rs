@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Fixed-capacity single-producer/single-consumer PCM. Neither cursor is reset by FLUSH.
 use std::{
     cell::UnsafeCell,

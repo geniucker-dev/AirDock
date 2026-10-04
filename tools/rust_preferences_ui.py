@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Real Iced interactions: draft isolation, immediate audio, persistent geometry and player controls.
 Xvfb with a virtual ALSA device. Physical WASAPI/tray/DPI remain separate acceptance.
 """
@@ -58,14 +59,14 @@ def main():
     report={}
     try:
         process,window=launch('initial')
-        click(window,100,215)
-        edit(window,450,205,'Unsaved receiver draft')
+        click(window,402,34)
+        edit(window,300,260,'Unsaved receiver draft')
         assert settings.read_bytes()==original
-        xdo('mousemove','--window',window,700,550);xdo('click','--repeat',3,5);time.sleep(.3)
+        # Wide settings places output selection beside receiver fields.
         ImageGrab.grab(xdisplay='').save(output/'audio-scrolled.png')
-        click(window,600,335)
+        click(window,800,237)
         ImageGrab.grab(xdisplay='').save(output/'audio-menu.png')
-        click(window,500,405)
+        click(window,800,295)
         until(lambda:stored().get('audio_device','default')!='default')
         selected=stored()['audio_device'];assert stored()['name']=='AirPlay-Windows'
         report['immediate_audio_preserves_unsaved_draft']='passed'
@@ -76,18 +77,18 @@ def main():
         xdo('key','ctrl+q');assert process.wait(timeout=10)==0
         process,window=launch('restart')
         assert geometry(window)=={'WIDTH':960,'HEIGHT':640}
-        click(window,100,215)
-        edit(window,450,205,'Saved receiver')
-        click(window,260,597)
+        click(window,402,34)
+        edit(window,300,260,'Saved receiver')
+        click(window,85,597)
         until(lambda:stored().get('name')=='Saved receiver')
         before=settings.read_bytes()
-        edit(window,330,279,'invalid')
-        click(window,260,597)
+        edit(window,140,335,'invalid')
+        click(window,85,597)
         assert settings.read_bytes()==before, 'Invalid form was partly applied'
         ImageGrab.grab(xdisplay='').save(output/'invalid-width.png')
-        click(window,400,597) # Reset draft, without committing anything.
+        click(window,205,597) # Reset draft, without committing anything.
         assert settings.read_bytes()==before
-        click(window,260,597)
+        click(window,85,597)
         until(lambda:stored().get('name')=='AirPlay-Windows')
         assert stored()['audio_device']==selected
         report['validation_save_reset_and_geometry_restart']='passed'

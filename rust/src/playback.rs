@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Media scheduling precedes the one-frame display mailbox. No UI or device handles here.
 use crate::{media::VideoFrame, state::Metrics};
 use std::{
@@ -207,7 +208,7 @@ impl Playback {
                     } else {
                         let delta = queue
                             .front()
-                            .and_then(|f| f.pts)
+                            .and_then(|f| f.hls.then_some(f.pts).flatten())
                             .map(|pts| {
                                 let media_now =
                                     c.position(e.load(Ordering::Acquire)).or_else(|| {
@@ -255,7 +256,12 @@ impl Playback {
                     while let Some(f) = queue.front() {
                         let pts = f.pts.map(MediaTime::micros);
                         let now = Instant::now();
-                        let target = if let Some(pts) = pts {
+                        // Mirror frames are interactive: sender NTP is telemetry,
+                        // not permission to wait for the buffered audio horizon.
+                        // Only HLS uses PTS scheduling and audio as its master clock.
+                        let target = if f.hls
+                            && let Some(pts) = pts
+                        {
                             let (ae, ah, base, wall) =
                                 *anchor.get_or_insert((epoch, f.hls, pts, now));
                             if ae != epoch
@@ -269,13 +275,8 @@ impl Playback {
                                 .position(epoch)
                                 .unwrap_or(base + wall.elapsed().as_micros() as i64);
                             let delta = pts.saturating_sub(media_now);
-                            if !f.hls && delta > 100_000 {
-                                anchor = Some((epoch, f.hls, pts, now));
-                                now
-                            } else {
-                                now.checked_add(Duration::from_micros(delta.max(0) as u64))
-                                    .unwrap_or(now)
-                            }
+                            now.checked_add(Duration::from_micros(delta.max(0) as u64))
+                                .unwrap_or(now)
                         } else {
                             now
                         };
@@ -561,6 +562,31 @@ mod tests {
             thread::sleep(Duration::from_millis(2));
         }
         assert_eq!(p.pending_frames(), 0);
+    }
+    #[test]
+    fn mirror_does_not_wait_for_stalled_or_buffered_audio() {
+        let p = Playback::new(Arc::new(AtomicU64::new(2)), Arc::new(Metrics::default()));
+        // The old path waited forever for this horizon to reach the mirror PTS.
+        p.audio_clock
+            .update(2, 0, p.audio_clock.now_us(), 40_000, 0);
+        p.submit(VideoFrame {
+            frame: ffmpeg_next::frame::Video::new(ffmpeg_next::format::Pixel::YUV420P, 16, 16),
+            received: Instant::now(),
+            pts: Some(MediaTime::microseconds(90_000)),
+            epoch: 2,
+            sequence: 0,
+            hls: false,
+        });
+        let mailbox = p.display.latest.lock().unwrap();
+        let (mailbox, _) = p
+            .display
+            .ready
+            .wait_timeout_while(mailbox, Duration::from_millis(80), |f| f.is_none())
+            .unwrap();
+        assert!(
+            mailbox.is_some(),
+            "Mirror stalled behind audio instead of displaying immediately"
+        );
     }
     #[test]
     fn old_generation_cannot_enter_display() {

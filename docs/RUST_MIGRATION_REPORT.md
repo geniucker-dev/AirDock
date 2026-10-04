@@ -9,7 +9,7 @@ Old/new character diagrams and ownership are in [architecture](RUST_ARCHITECTURE
 - Replaced Slint/SDL desktop rendering with Iced and one shared wgpu compositor.
   NV12/YUV420P planes upload to reusable textures; a custom primitive draws into
   Iced's current render pass. Stale frames are replaced immediately before upload.
-- Added receiver/settings/diagnostics pages, fullscreen/focus, Windows tray
+- Added receiver/settings pages with inline reception diagnostics, fullscreen/focus, Windows tray
   restoration, startup/device/GPU options, cover art and compatible configuration.
 - Added validated settings drafts/save feedback, independently saved audio output
   and geometry, close-to-tray policy and automatically hidden mouse playback controls.
@@ -51,6 +51,35 @@ synthetic device-loss fixture recovered and submitted 118/120; dropped frames
 during reconstruction are counted. These are software-renderer submission counts,
 not physical display FPS or C++/Slint performance parity measurements.
 
+## Receiver UI and latency follow-up
+
+The desktop now uses a compact top navigation, a black playback stage, Manrope
+Regular/SemiBold and a quiet steel-blue shell. Receive includes live new-submission
+FPS, internal processing time, bandwidth and skipped frames. Video, timing, audio
+and transport diagnostics expand in the same page. Settings adapts from two
+columns to one; video-only fullscreen and automatically hidden controls remain.
+Layout/styles are separate from desktop lifecycle. No idle animation was added.
+
+Mirror frames no longer wait behind a stalled or buffered audio clock. HLS retains
+PTS scheduling. Status clones only on revision changes, the Receive tree is cached
+between changes, and GPU prepare reads the latest display mailbox. VSync settings
+now reach Iced, preferring Mailbox when supported. Balanced GPU selection follows
+the monitor's adapter; hidden-start decoding obtains a matching adapter up front.
+The explicit low-power/high-performance overrides remain available.
+
+Project-owned Rust source/tools now carry MPL-2.0; upstream MIT/OFL/LGPL and
+historical GPL material retain their notices. Binary packaging checks exact source
+and payload license consistency, including the embedded Manrope font's OFL.
+
+Local follow-up: 51 unit regressions, Clippy, 115,616 GPU colour comparisons
+(maximum 1/255), encrypted mirroring, reconnect/FLUSH, fMP4 HLS and 11 desktop
+scenes passed. Audio-selection/draft isolation, invalid setting rejection, window
+geometry restart and fullscreen mute/auto-hide passed on virtual ALSA/Xvfb.
+The 30-frame receive fixture submitted all frames; 32 video events produced only
+13 receiver-tree rebuilds. This is software GPU evidence, not Windows hardware
+latency/FPS parity. Hidden/settings presentation and video-only reveal were also
+checked; physical tray, hybrid GPU and WASAPI acceptance remain pending.
+
 ## Distribution and limits
 
 Download `airplay-windows-rust-x64-<commit>` from the final successful CI run.
@@ -73,6 +102,6 @@ Video needs a compatible wgpu adapter; software UI fallback clearly reports its
 video limitation. P010/YUV420P10 and PQ/HLG are supported through GPU HDR-to-SDR
 mapping. Native HDR output, dynamic HDR metadata and BT.2020 CL remain unsupported.
 Hardware frames still download to software YUV before plane upload; this is not
-zero-copy. The project license remains GPL-3.0-only pending the separate source
-relationship review in RUST_SOURCE_ORIGIN.md. FairPlay authorization is outside
+zero-copy. Project-owned Rust code is MPL-2.0; third-party and historical GPL
+reference licenses remain distinct (LICENSES.md / RUST_SOURCE_ORIGIN.md). FairPlay authorization is outside
 this migration's scope.

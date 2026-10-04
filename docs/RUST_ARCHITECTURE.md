@@ -66,8 +66,9 @@ presentation deadline. When available, estimated audible PCM position is the
 video master; otherwise playback uses a monotonic PTS anchor that stops during HLS pause. The display slot
 contains only the newest frame released by scheduling; future frames remain in
 a bounded scheduling queue. Already-due frames are coalesced to the newest due
-frame; future frames are not presented early. Mirroring does not build a large
-queue to chase a source clock more than 100 ms ahead. The mirrored audio producer uses a slow occupancy
+frame; future frames are not presented early. Mirroring releases decoded frames immediately, without waiting for an audio-clock
+horizon that can stall or lag behind live video. Source PTS remains telemetry;
+HLS alone uses timestamp scheduling. The mirrored audio producer uses a slow occupancy
 servo limited to 300 ppm, outside the real-time callback. HLS does not adjust
 rate based on how quickly its network source downloads. The clock clamps to
 the last submitted PCM horizon during underflow. Natural HLS EOF drains both
@@ -106,10 +107,12 @@ HDR output and dynamic HDR metadata processing are outside this path. BT.2020 CL
 frames are downloaded to software YUV first. This is not zero-copy.
 
 The owned compositor uses Iced's public Engine/Renderer interfaces. It chooses
-compatible adapters with a balanced integrated-GPU preference, exposes an
+compatible adapters with a balanced preference for the GPU driving the window's
+monitor (integrated GPU as fallback), exposes an
 explicit high-performance override, reuses the UI device/target, and attempts
 bounded device reconstruction after device loss. Surface reconfiguration is
-separate from device reconstruction. D3D11VA attempts the DXGI adapter matching
+separate from device reconstruction. Hidden startup obtains the primary monitor's adapter before decoding starts.
+D3D11VA attempts the DXGI adapter matching
 the render PCI vendor/device identity; NVDEC/CPU remain decode fallbacks. This
 is best-effort adapter matching, not a native GPU frame sharing interface. Software GPU adapters remain distinguishable
 from hardware. If GPU initialization fails, the software UI remains available
@@ -149,6 +152,19 @@ LGPL playback-only overlay, with exact patched sources included in distributions
 DLL configuration, license, ABI, loaded path, codecs and dependency closure are
 checked again after packaging, including cache restores.
 
-The project's own license is unchanged. Replacing dependencies does not establish
-that existing Rust protocol implementation is independent of GPL C++ sources;
-that source relationship must be audited separately before any relicensing.
+Project-owned Rust code is MPL-2.0 following the scoped source review in
+RUST_SOURCE_ORIGIN.md. Third-party MIT code and LGPL DLLs retain their licenses;
+historical GPL C++/test references are excluded from runtime linkage.
+
+## Desktop presentation
+
+The Receive page gives the video most of the window, with a compact top navigation
+and a flat live statistics rail. Detailed video, clock, audio and transport status
+expand within Receive. Settings uses one scrollable form, two columns on wide
+windows and one on narrow windows. `desktop/view.rs` owns layout;
+`desktop/appearance.rs` owns visual tokens/styles; `desktop/form.rs` owns drafts
+and validation. The UI does not animate while idle. Status is cloned on revision
+changes, the receiver layout is cached between changes, and the video primitive
+consumes the newest display frame at prepare time. Fullscreen remains video only,
+with mouse controls that disappear when unused. VSync prefers Mailbox when
+supported, otherwise AutoVsync; disabling it requests AutoNoVsync.

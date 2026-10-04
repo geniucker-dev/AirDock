@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Exercise Iced pages, fullscreen/focus restoration and legacy config upgrade in Xvfb.
 Windows DPI, tray and physical GPU acceptance remain separate hardware checks.
 """
@@ -27,10 +28,10 @@ def main():
     atexit.register(lambda: wm.terminate() if wm.poll() is None else None)
     time.sleep(.25)
     captures = {}
-    for page, y in [('receiver', None), ('settings', 215), ('diagnostics', 260),
+    for page, y in [('receiver', None), ('settings', 34), ('details', None),
                     ('focus', None), ('fullscreen', None), ('restore', None),
-                    ('fullscreen-settings', 215), ('restore-settings', 215),
-                    ('edit-settings', 215), ('resize', None)]:
+                    ('fullscreen-settings', 34), ('restore-settings', 34),
+                    ('edit-settings', 34), ('resize', None), ('narrow-details', None)]:
         directory = output / page
         directory.mkdir(exist_ok=True)
         legacy = {'vsync': False, 'recording_enabled': True, 'recording_path': 'preserve-existing-files'}
@@ -58,7 +59,10 @@ def main():
                 xdo('windowfocus', window)
                 time.sleep(.25)
                 if y is not None:
-                    xdo('mousemove', '--window', window, 100, y)
+                    xdo('mousemove', '--window', window, 402, y)
+                    xdo('click', 1)
+                if page in ('details', 'narrow-details'):
+                    xdo('mousemove', '--window', window, 920, 109)
                     xdo('click', 1)
                 if page in ['focus', 'fullscreen']:
                     xdo('key', 'ctrl+h' if page == 'focus' else 'F11')
@@ -71,15 +75,17 @@ def main():
                     for key in ['ctrl+h', 'F11', 'Escape', 'ctrl+h']:
                         xdo('key', key)
                         time.sleep(.1)
+                if page == 'narrow-details':
+                    xdo('windowsize', window, 760, 600)
                 if page == 'resize':
                     xdo('windowsize', window, 960, 640)
                 if page == 'edit-settings':
                     time.sleep(.15)
-                    xdo('mousemove', '--window', window, 450, 205)
+                    xdo('mousemove', '--window', window, 300, 260)
                     xdo('click', 1)
                     xdo('key', 'ctrl+a')
                     xdo('type', '--clearmodifiers', '--delay', 0, 'Iced UI acceptance')
-                    xdo('mousemove', '--window', window, 260, 717)
+                    xdo('mousemove', '--window', window, 85, 717)
                     xdo('click', 1)
                 assert process.wait(timeout=12) == 0, directory
             finally:
@@ -96,13 +102,23 @@ def main():
                 # title, footer or outer padding even when entering from settings.
                 for region in [(0, 0, 180, 180), (0, height-70, width, height)]:
                     assert max(ImageStat.Stat(image.crop(region).convert('RGB')).mean) < .1, page
+        if page in ('receiver', 'details', 'narrow-details'):
+            image = Image.open(capture).convert('RGB')
+            def ink(box):
+                # Count actual dark text against the light chrome, not pale backgrounds.
+                return sum(1 for rgb in image.crop(box).getdata() if max(rgb) < 150)
+            rail_y = height-64 if page == 'receiver' else height-272
+            assert ink((24, rail_y, width-24, rail_y+42)) > 300, 'Reception statistics were not painted'
+            assert ink((24, rail_y-48, 115, rail_y-16)) > 70, 'Player button text disappeared'
+            if page != 'receiver':
+                assert ink((40, height-205, width-40, height-45)) > (150 if page == 'narrow-details' else 500), 'Inline diagnostic text was not painted'
         captures[page] = {'width': width, 'height': height, 'sha256': hashlib.sha256(png).hexdigest(),
                           'viewport_sha256': hashlib.sha256(viewport).hexdigest()}
         if page == 'edit-settings':
             saved = json.loads(settings.read_text())
             assert saved['name'] == 'Iced UI acceptance', saved
             assert 'recording_enabled' not in saved and 'recording_path' not in saved
-        elif page in ['receiver','settings','diagnostics']:
+        elif page in ['receiver','settings','details']:
             assert settings.read_bytes() == original, 'Reading legacy config modified the user file'
         else:
             saved=json.loads(settings.read_text())
@@ -112,7 +128,7 @@ def main():
     assert captures['fullscreen']['width'] > captures['receiver']['width']
     assert captures['fullscreen-settings']['width'] == captures['fullscreen']['width']
     assert captures['resize']['width'] == 960
-    assert len({captures[p]['viewport_sha256'] for p in ['receiver', 'settings', 'diagnostics', 'focus']}) == 4
+    assert len({captures[p]['viewport_sha256'] for p in ['receiver', 'settings', 'details', 'focus']}) == 4
     assert (captures['restore']['width'], captures['restore']['height']) == (captures['receiver']['width'], captures['receiver']['height'])
     # Rasterized glyph edges may differ slightly after a GPU atlas rebuild.
     # Verify restored layout/content with a tight pixel bound, not exact glyph hashes.

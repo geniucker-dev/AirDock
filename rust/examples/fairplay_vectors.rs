@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::io::{self, BufRead};
 fn main() -> anyhow::Result<()> {
     for line in io::stdin().lock().lines() {

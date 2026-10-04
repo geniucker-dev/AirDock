@@ -19,8 +19,9 @@ service and its media workers.
 - cpal audio output with negotiated device formats, an allocation-free application
   callback, underflow recovery and default/selected-device reconstruction.
 - Separate HLS demux/audio/video scheduling, TS/fMP4 and FCUP resource delivery.
-- Receiver/settings/diagnostic pages, cover art, volume, Windows tray restoration,
-  startup options and persistent compatible settings.
+- Receiver/settings pages with inline playback diagnostics, live frame rate,
+  processing time, bandwidth, cover art, volume, Windows tray restoration, startup
+  options and persistent compatible settings.
 - Recording and all related UI, configuration, encoders and output workers removed.
   Old recording configuration values are ignored; existing user files are untouched.
 
@@ -77,7 +78,11 @@ both the C++ `562120e4` and Rust/Slint `43bcb0c` baselines on identical hardware
 
 ## License
 
-The project license remains unchanged pending a separate audit of the existing
-Rust implementation's relationship to GPL C++ sources. Removing Slint/GPL FFmpeg
-features is not itself permission to relicense existing code. Third-party license
-texts and FFmpeg build/source materials accompany Windows distributions.
+The Iced Rust implementation and its project-owned build tools are licensed under
+**MPL-2.0**. Modified MPL files must remain available as source when distributed;
+other files can retain their own licenses. See [LICENSES.md](LICENSES.md) for scope
+and [source review](docs/RUST_SOURCE_ORIGIN.md) for the C++/Rust relationship.
+Third-party licenses remain unchanged, including MIT PlayFair notices and LGPL
+FFmpeg DLLs. Distributions include corresponding source, build materials and notices.
+Historical C++ code and GPL test references retain GPL-3.0; they are not linked
+into the Rust receiver.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Independent f64 colour oracle: derive primary transforms from xy coordinates,
 //! evaluate transfer equations directly, and express the shoulder as a Bezier.
 use airplay_windows::render::VideoPipeline;

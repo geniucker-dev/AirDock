@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::sync::{
     Arc, Condvar, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},

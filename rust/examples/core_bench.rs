@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use ffmpeg_next::{format::Pixel, frame::Video};
 fn main() -> anyhow::Result<()> {
     let args = std::env::args().collect::<Vec<_>>();

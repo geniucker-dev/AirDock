@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 """Build portable ZIP and user-level Inno installer from one audited payload."""
 import argparse
 import hashlib

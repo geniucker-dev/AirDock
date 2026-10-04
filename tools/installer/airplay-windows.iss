@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: MPL-2.0
 #ifndef SourceDir
   #error SourceDir must refer to an audited Windows package
 #endif

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Display-referred HDR to SDR, using ST 2084 / BT.2100 and a BT.2390 EETF.
 //! Tables are generated only when colour metadata changes, never per video pixel.
 use anyhow::{Result, bail};

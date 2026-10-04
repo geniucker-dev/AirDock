@@ -1,7 +1,7 @@
+// SPDX-License-Identifier: MPL-2.0
 pub mod compositor;
 use crate::{
     media::{
-        VideoFrame,
         color::{self, Profile},
         display::{self, Layout, Storage},
     },
@@ -20,7 +20,7 @@ use std::{
 };
 #[derive(Clone)]
 pub struct Video {
-    pub frame: Arc<VideoFrame>,
+    pub epoch: u64,
     pub shared: Arc<Shared>,
     pub crop: bool,
 }
@@ -29,21 +29,21 @@ impl<Message> shader::Program<Message> for Video {
     type Primitive = VideoPrimitive;
     fn draw(&self, _: &(), _: mouse::Cursor, _: Rectangle) -> VideoPrimitive {
         VideoPrimitive {
-            frame: self.frame.clone(),
+            epoch: self.epoch,
             shared: self.shared.clone(),
             crop: self.crop,
         }
     }
 }
 pub struct VideoPrimitive {
-    frame: Arc<VideoFrame>,
+    epoch: u64,
     shared: Arc<Shared>,
     crop: bool,
 }
 impl fmt::Debug for VideoPrimitive {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("YuvVideo")
-            .field("sequence", &self.frame.sequence)
+            .field("epoch", &self.epoch)
             .finish()
     }
 }
@@ -471,7 +471,7 @@ impl Primitive for VideoPrimitive {
         bounds: &Rectangle,
         viewport: &shader::Viewport,
     ) {
-        if self.frame.epoch != self.shared.generation()
+        if self.epoch != self.shared.generation()
             || !self.shared.media.display.visible.load(Ordering::Acquire)
         {
             p.valid = false;

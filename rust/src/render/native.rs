@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use anyhow::Result;
 use ffmpeg_next::ffi;
 use std::ffi::CStr;

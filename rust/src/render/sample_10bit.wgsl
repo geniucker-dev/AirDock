@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 fn texel(plane:texture_2d<u32>,point:vec2<i32>)->vec2<f32> {
     let size=vec2<i32>(textureDimensions(plane));
     let word=textureLoad(plane,clamp(point,vec2(0),size-vec2(1)),0).rg;
