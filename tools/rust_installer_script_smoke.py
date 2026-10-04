@@ -43,6 +43,7 @@ def main():
                 subprocess.run([str(base/'installer-script-fixture.exe'), '/VERYSILENT', '/SUPPRESSMSGBOXES',
                                 '/NORESTART', '/SP-', '/DIR='+str(install)], check=True)
                 set_run((value, winreg.REG_SZ))
+                assert run_value() == (value, winreg.REG_SZ)
                 uninstall(stage)
                 assert run_value() == (None if stage == 'own' else (value, winreg.REG_SZ)), stage
             print('Installer callbacks: owned autostart removed; foreign autostart preserved.')
