@@ -14,6 +14,8 @@ service and its media workers.
 - H.264 / HEVC decoding, including D3D11VA and NVDEC fallback paths.
 - Reusable NV12 / YUV420P plane textures, GPU colour conversion, aspect fit/crop
   and full-screen presentation. No CPU YUV-to-RGBA video conversion.
+- P010 / YUV420P10 Main10 input, PQ/HLG HDR to SDR tone mapping and BT.2020/P3
+  gamut conversion. HDR playback uses the same shared GPU render pass.
 - cpal audio output with negotiated device formats, an allocation-free application
   callback, underflow recovery and default/selected-device reconstruction.
 - Separate HLS demux/audio/video scheduling, TS/fMP4 and FCUP resource delivery.
@@ -23,8 +25,10 @@ service and its media workers.
   Old recording configuration values are ignored; existing user files are untouched.
 
 Video requires a compatible GPU backend. Software UI fallback supports controls
-and audio but displays an explicit video limitation. P010/10-bit, BT.2020 CL and
-HDR PQ/HLG are explicitly unsupported in this first renderer. Hardware decode
+and audio but displays an explicit video limitation. 10-bit PQ/HLG video is
+mapped to the current SDR window; native Windows HDR output and Dolby Vision /
+HDR10+ dynamic metadata are not implemented. BT.2020 CL, 12-bit and non-420
+formats remain unsupported. See [HDR rendering](docs/RUST_HDR.md). Hardware decode
 still downloads to software YUV before upload: **this is not zero-copy**.
 
 ## Run

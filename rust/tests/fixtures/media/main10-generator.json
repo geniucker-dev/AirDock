@@ -1,0 +1,9 @@
+{
+  "tool": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+  "content": "Synthetic testsrc2 and sine, no device recording",
+  "profiles": [
+    "Main10 SDR BT.709",
+    "PQ BT.2020 MaxCLL 800 mastering peak 1000",
+    "HLG BT.2020 nominal peak 1000"
+  ]
+}

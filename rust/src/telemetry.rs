@@ -2,12 +2,16 @@ use std::{
     collections::VecDeque,
     sync::{
         Mutex,
-        atomic::{AtomicBool, AtomicI64, AtomicU64},
+        atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering},
     },
 };
 #[derive(Default)]
 pub struct Metrics {
     pub decoded: AtomicU64,
+    pub video_depth: AtomicU32,
+    pub video_colour_mode: AtomicU32,
+    pub hdr_uploaded: AtomicU64,
+    pub ten_bit_uploaded: AtomicU64,
     pub estimated_av_offset_us: AtomicI64,
     pub estimated_av_available: AtomicBool,
     pub presented: AtomicU64,
@@ -26,4 +30,18 @@ pub struct Metrics {
     pub stale_dropped: AtomicU64,
     pub uploaded: AtomicU64,
     pub present_intervals_us: Mutex<VecDeque<u64>>,
+}
+impl Metrics {
+    pub fn video_colour_label(&self) -> &'static str {
+        match self.video_colour_mode.load(Ordering::Relaxed) {
+            1 => "PQ HDR → SDR",
+            2 => "HLG HDR → SDR",
+            3 => "Wide-gamut SDR → sRGB",
+            _ => match self.video_depth.load(Ordering::Relaxed) {
+                10 => "10-bit SDR",
+                8 => "8-bit SDR",
+                _ => "No displayed video",
+            },
+        }
+    }
 }

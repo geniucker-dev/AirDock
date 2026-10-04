@@ -4,6 +4,8 @@ fn main() -> Result<()> {
     ffmpeg::init()?;
     let mut total = 0;
     let mut formats = Vec::new();
+    let mut pixels = Vec::new();
+    let mut colours = Vec::new();
     for path in std::env::args().skip(1) {
         let mut input = ffmpeg::format::input(&path)?;
         let stream = input
@@ -26,6 +28,8 @@ fn main() -> Result<()> {
                     Ok(()) => {
                         let planes = airplay_windows::media::display::describe(&frame)?;
                         formats.push(format!("{:?}", planes.layout));
+                        pixels.push(format!("{:?}", frame.format()));
+                        colours.push(format!("{:?}:{}", planes.color.transfer, planes.color.peak));
                         count += 1;
                     }
                     Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => break,
@@ -39,7 +43,9 @@ fn main() -> Result<()> {
             if decoder.receive_frame(&mut f).is_err() {
                 break;
             }
-            airplay_windows::media::display::describe(&f)?;
+            let planes = airplay_windows::media::display::describe(&f)?;
+            pixels.push(format!("{:?}", f.format()));
+            colours.push(format!("{:?}:{}", planes.color.transfer, planes.color.peak));
             count += 1;
         }
         ensure!(count > 0, "No decoded frames");
@@ -47,9 +53,13 @@ fn main() -> Result<()> {
     }
     formats.sort();
     formats.dedup();
+    pixels.sort();
+    pixels.dedup();
+    colours.sort();
+    colours.dedup();
     println!(
         "{}",
-        serde_json::json!({"decoded_frames":total,"validated_formats":formats})
+        serde_json::json!({"decoded_frames":total,"validated_formats":formats,"validated_pixel_formats":pixels,"colour_profiles":colours})
     );
     Ok(())
 }

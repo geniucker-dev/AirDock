@@ -13,7 +13,9 @@ The project license remains unchanged pending a separate source relationship rev
 - HLS TS and fMP4 proxy/demux/decode, cancellation and audio/video sample counts.
 - Production WGSL shader readback for NV12/YUV420P, six SDR matrices,
   limited/full range and linear/sRGB render targets. RGB error at most 2/255.
-- Invalid stride/buffer extents and unsupported 10-bit/HDR input are rejected.
+- P010/YUV420P10 limited/full range, PQ/HLG transfer and HDR-to-SDR/gamut mapping,
+  metadata fallback, static peak changes and 8/10-bit/HDR stream transitions.
+  Invalid stride/buffer extents and unsupported 12-bit/non-420/BT.2020 CL are rejected.
 - Audio callback allocation guard, negotiated sample conversion, ring publication,
   generation isolation, pause and starvation; legacy configuration compatibility.
 - Iced pages, fullscreen/focus restoration, resizing and settings save under Xvfb.

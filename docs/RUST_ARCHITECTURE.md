@@ -88,16 +88,21 @@ predictions of output delivery, not a measurement of the final speaker path.
 
 ## Video and GPU support
 
-The production shader accepts validated 8-bit NV12 and YUV420P/YUVJ420P. It
+The production shader accepts 8-bit NV12/YUV420P/YUVJ420P and 10-bit
+P010LE/YUV420P10LE. It
 handles padded and signed strides, odd chroma sizes, explicit full/limited range,
 BT.709, BT.601, FCC, SMPTE240M and BT.2020 NCL. Missing mirroring range retains
 the prior full-range convention; HLS supplies limited range when unspecified.
-Matrices are not guessed from resolution. R8 / RG8 plane textures and bindings
-are reused; no per-frame CPU RGBA conversion or image handle is created.
+Matrices are not guessed from resolution. R8/RG8 and R16Uint/RG16Uint plane
+textures and bindings are reused. The integer shader masks unused bits before
+bilinear scaling, without optional GPU format features. No per-frame CPU RGBA
+conversion or image handle is created.
 
-P010 / other 10-bit formats, BT.2020 CL and PQ/HLG are explicitly rejected with
-an error rather than silently shown with an 8-bit or SDR matrix. This is an
-intentional first-version support boundary, not HDR support. Native D3D11/CUDA
+PQ/HLG transfer functions, static HDR peak metadata, a BT.2390 highlight shoulder
+and BT.2020/P3 to BT.709 gamut conversion map HDR to the SDR window. Cached LUTs
+change only when colour metadata changes; the SDR path skips them. Native Windows
+HDR output and dynamic HDR metadata processing are outside this path. BT.2020 CL,
+12-bit and non-420 formats remain explicitly rejected. See RUST_HDR.md. Native D3D11/CUDA
 frames are downloaded to software YUV first. This is not zero-copy.
 
 The owned compositor uses Iced's public Engine/Renderer interfaces. It chooses

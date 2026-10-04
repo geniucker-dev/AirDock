@@ -11,6 +11,23 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn frame_bytes(frame: &VideoFrame) -> u64 {
+    // Use backing allocations: word YUV and decoder stride padding cost more
+    // than the old width*height*1.5 byte estimate.
+    unsafe {
+        (*frame.frame.as_ptr())
+            .buf
+            .iter()
+            .copied()
+            .filter(|p| !p.is_null())
+            .map(|p| (*p).size as u64)
+            .sum()
+    }
+}
+fn intake_available(queue: &VecDeque<VideoFrame>) -> bool {
+    queue.len() < 8 && queue.iter().map(frame_bytes).sum::<u64>() < 48 * 1024 * 1024
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MediaTime {
     pub ticks: i64,
@@ -200,18 +217,18 @@ impl Playback {
                             .unwrap_or(0);
                         Duration::from_micros(delta.clamp(1_000, 20_000) as u64)
                     };
-                    match recv.recv_timeout(wait) {
-                        Ok(f) => queue.push_back(f),
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                        Err(_) => {}
+                    if intake_available(&queue) {
+                        match recv.recv_timeout(wait) {
+                            Ok(f) => queue.push_back(f),
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                            Err(_) => {}
+                        }
+                    } else {
+                        // Do not receive another future/paused frame every loop
+                        // after the queue fills; keep producer backpressure.
+                        thread::park_timeout(wait);
                     }
-                    while queue.len() < 8
-                        && queue
-                            .iter()
-                            .map(|f| f.frame.width() as u64 * f.frame.height() as u64 * 3 / 2)
-                            .sum::<u64>()
-                            < 48 * 1024 * 1024
-                    {
+                    while intake_available(&queue) {
                         match recv.try_recv() {
                             Ok(f) => queue.push_back(f),
                             Err(_) => break,
@@ -358,6 +375,52 @@ impl Drop for Playback {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn future_word_frames_keep_bounded_intake_and_shutdown_unblocks_producer() {
+        let p = Arc::new(Playback::new(
+            Arc::new(AtomicU64::new(2)),
+            Arc::new(Metrics::default()),
+        ));
+        p.audio_clock.update(2, 0, p.audio_clock.now_us(), 0, 0);
+        let completed = Arc::new(AtomicUsize::new(0));
+        let producer = p.clone();
+        let count = completed.clone();
+        let t = thread::spawn(move || {
+            for _ in 0..24 {
+                producer.submit(VideoFrame {
+                    frame: ffmpeg_next::frame::Video::new(
+                        ffmpeg_next::format::Pixel::P010LE,
+                        64,
+                        64,
+                    ),
+                    received: Instant::now(),
+                    pts: Some(MediaTime::microseconds(10_000_000)),
+                    epoch: 2,
+                    sequence: 0,
+                    hls: true,
+                });
+                count.fetch_add(1, Ordering::Release);
+            }
+        });
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while completed.load(Ordering::Acquire) < 10 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(2));
+        }
+        thread::sleep(Duration::from_millis(60));
+        let accepted = completed.load(Ordering::Acquire);
+        let pending = p.pending_frames();
+        p.stop();
+        t.join().unwrap();
+        assert_eq!(
+            accepted, 10,
+            "Eight scheduled frames plus two in the channel"
+        );
+        assert!(
+            pending <= 11,
+            "At most one additional blocked producer frame"
+        );
+        assert_eq!(p.pending_frames(), 0);
+    }
     #[test]
     fn rational_pts_and_ntp_keep_precision() {
         assert_eq!(

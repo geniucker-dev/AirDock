@@ -16,11 +16,15 @@ def main():
     parser.add_argument('--binary', required=True, type=pathlib.Path)
     parser.add_argument('--device-backend', action='store_true', help='Exercise CPAL with an explicitly configured virtual device; not physical audio acceptance')
     parser.add_argument('--fmp4',action='store_true')
+    parser.add_argument('--hdr',choices=['pq','hlg'])
+    parser.add_argument('--gui',action='store_true')
     args = parser.parse_args()
-    output = ROOT / 'rust-validation' / ('hls-cpal' if args.device_backend else 'hls-fmp4' if args.fmp4 else 'hls-ts')
+    if args.hdr:
+        assert args.fmp4, 'HDR fixtures use fMP4'
+    output = ROOT / 'rust-validation' / (('hls-cpal' if args.device_backend else 'hls-fmp4' if args.fmp4 else 'hls-ts')+('-'+args.hdr if args.hdr else '')+('-gui' if args.gui else ''))
     output.mkdir(parents=True, exist_ok=True)
     import shutil
-    fixtures=ROOT/'rust/tests/fixtures/media/hls'
+    fixtures=ROOT/'rust/tests/fixtures/media'/('hls-'+args.hdr if args.hdr else 'hls')
     for source in fixtures.iterdir():
         shutil.copy2(source,output/source.name)
     prefix = 'mlhls://fixture/'
@@ -39,7 +43,7 @@ def main():
     errors, requests = [], []
     stopped = threading.Event()
     with (output / 'receiver.log').open('w') as log:
-        process = subprocess.Popen([str(args.binary.resolve()), '--headless', '--hls-proxy-playback',
+        process = subprocess.Popen([str(args.binary.resolve()), *([] if args.gui else ['--headless']), '--hls-proxy-playback',
                                     '--port', str(port), '--config-dir', str(output / 'config'),
                                     '--metrics', str(output / 'metrics.json'), '--exit-after', '8'],
                                    env=env, stdout=log, stderr=log)
@@ -138,8 +142,13 @@ def main():
     assert metrics['decoded_frames'] == 30, metrics
     assert 40000 <= metrics['hls_audio_samples_per_channel'] <= 48000, metrics
     assert not errors, errors
+    if args.gui:
+        assert metrics['presented_frames']>0 and metrics['uploaded_frames']>0,metrics
+        assert 'Video display:' not in (output/'receiver.log').read_text(),(output/'receiver.log').read_text()
+        if args.hdr:
+            assert metrics['ten_bit_uploaded_frames']>0 and metrics['hdr_uploaded_frames']>0,metrics
     result = {'fcup_requests': requests, 'decoded_frames': 30, 'audio_samples_per_channel': metrics['hls_audio_samples_per_channel'], 'playback_info': info,
-              'cancellation_seconds': cancel_seconds, 'hardware_parity': 'pending'}
+              'cancellation_seconds': cancel_seconds, 'submitted_frames':metrics['presented_frames'], 'hdr':args.hdr, 'hardware_parity': 'pending'}
     (output / 'results.json').write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
 

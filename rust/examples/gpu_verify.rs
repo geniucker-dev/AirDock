@@ -7,6 +7,7 @@ use ffmpeg_next::{
     frame::Video,
 };
 use iced_wgpu::{primitive::Pipeline, wgpu};
+mod hdr_oracle;
 fn main() -> Result<()> {
     futures::executor::block_on(verify())
 }
@@ -189,9 +190,10 @@ async fn verify() -> Result<()> {
             }
         }
     }
+    let (hdr_checks, hdr_worst) = hdr_oracle::verify(&device, &queue).await?;
     println!(
         "{}",
-        serde_json::json!({"adapter":adapter.get_info().name,"backend":format!("{:?}",adapter.get_info().backend),"checks":checks,"max_error_255":worst,"hardware_performance_verified":false})
+        serde_json::json!({"adapter":adapter.get_info().name,"backend":format!("{:?}",adapter.get_info().backend),"checks":checks+hdr_checks,"sdr_checks":checks,"ten_bit_hdr_checks":hdr_checks,"max_error_255":worst.max(hdr_worst),"hardware_performance_verified":false})
     );
     Ok(())
 }

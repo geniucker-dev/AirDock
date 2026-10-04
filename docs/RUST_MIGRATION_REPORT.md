@@ -35,7 +35,7 @@ on `1ac2d47`. Final artifacts from subsequent successful runs are authoritative.
 |---|---|
 | Format / Clippy | Passed, warnings denied |
 | Unit regressions | 38 passed on Linux and Windows debug/release |
-| Production shader | 18,816 comparisons, maximum error 1/255 on Vulkan llvmpipe and Windows DX12 software adapter |
+| Production shader | Initial 18,816 SDR comparisons passed on Vulkan and DX12 software; current oracle adds 96,800 8/10-bit/HDR checks |
 | Encrypted mirroring | 26 protocol checks, 120 decoded frames, 64 audio packets |
 | Reconnect / replacement / FLUSH | 13 scenarios, 390 decoded frames |
 | HLS TS and fMP4 | 30 decoded frames and 46,080 PCM samples/channel each |
@@ -64,7 +64,8 @@ driver reset/hybrid-GPU power, HTTPS origins and same-device performance against
 both baselines remain **pending**. Detailed gates are in RUST_ACCEPTANCE.md.
 
 Video needs a compatible wgpu adapter; software UI fallback clearly reports its
-video limitation. 10-bit/P010/HDR and BT.2020 CL are explicitly unsupported.
+video limitation. P010/YUV420P10 and PQ/HLG are supported through GPU HDR-to-SDR
+mapping. Native HDR output, dynamic HDR metadata and BT.2020 CL remain unsupported.
 Hardware frames still download to software YUV before plane upload; this is not
 zero-copy. The project license remains GPL-3.0-only pending the separate source
 relationship review in RUST_SOURCE_ORIGIN.md. FairPlay authorization is outside

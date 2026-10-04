@@ -45,6 +45,7 @@ jobs:
       - run: python tools/rust_dependency_audit.py
       - run: python tools/rust_performance.py --output rust-validation/hardware-performance.json
       - run: python tools/rust_integration.py --binary target/debug/airplay-windows
+      - run: python tools/rust_integration.py --hdr --binary target/debug/airplay-windows
       - run: python tools/rust_shutdown_integration.py --binary target/debug/airplay-windows
       - run: python tools/rust_reconnect_integration.py --binary target/debug/airplay-windows
       - run: python tools/rust_hls_integration.py --binary target/debug/airplay-windows
@@ -62,6 +63,9 @@ jobs:
           xvfb-run -a python tools/rust_activity_integration.py --binary target/debug/airplay-windows
           xvfb-run -a python tools/rust_ui_smoke.py --binary target/debug/airplay-windows
           xvfb-run -a python tools/rust_integration.py --gui --binary target/debug/airplay-windows
+          xvfb-run -a python tools/rust_integration.py --hdr --gui --binary target/debug/airplay-windows
+          xvfb-run -a python tools/rust_hls_integration.py --fmp4 --hdr pq --gui --binary target/debug/airplay-windows
+          xvfb-run -a python tools/rust_hls_integration.py --fmp4 --hdr hlg --gui --binary target/debug/airplay-windows
           xvfb-run -a python tools/rust_reconnect_integration.py --gui --binary target/debug/airplay-windows
           AIRPLAY_GPU_TEST_LOSS_AFTER_MS=1500 xvfb-run -a python tools/rust_integration.py --gui --binary target/debug/airplay-windows
       - uses: actions/upload-artifact@v4

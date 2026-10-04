@@ -51,6 +51,8 @@ impl Shared {
         let _ = samples;
     }
     pub fn reset_media(&self) -> u64 {
+        self.metrics.video_depth.store(0, Ordering::Relaxed);
+        self.metrics.video_colour_mode.store(0, Ordering::Relaxed);
         self.metrics
             .estimated_av_available
             .store(false, Ordering::Release);
@@ -104,6 +106,9 @@ impl Shared {
             "av_measurement":"Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
             "presentation_measurement":"GPU render submission, not physical display time",
             "uploaded_frames":m.uploaded.load(Ordering::Relaxed),
+            "ten_bit_uploaded_frames":m.ten_bit_uploaded.load(Ordering::Relaxed),
+            "hdr_uploaded_frames":m.hdr_uploaded.load(Ordering::Relaxed),
+            "video_colour_mapping":m.video_colour_label(),
             "pending_scheduled_frames":self.media.pending_frames(),
             "audio_underruns":self.media.audio_clock.underruns.load(Ordering::Relaxed),
             "audio_output_latency_us":self.media.audio_clock.output_latency_us.load(Ordering::Relaxed),"latency_sample_count":latency.len(),"latency_sample_window":4096,

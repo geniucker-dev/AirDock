@@ -102,14 +102,15 @@ def wire_media(port,output,paths):
         finally:c.close()
     return runner.passed
 
-def generate_media(output):
+def generate_media(output,hdr=False):
     import shutil,hashlib
     fixtures=ROOT/'rust/tests/fixtures/media'
     for name,digest in json.loads((fixtures/'sha256.json').read_text()).items():
         assert hashlib.sha256((fixtures/name).read_bytes()).hexdigest()==digest,name
     paths=[]
-    for codec,dimensions in [('libx264','128x96'),('libx264','96x128'),('libx265','128x96'),('libx265','96x128')]:
-        source=fixtures/(codec+'-'+dimensions+'.mp4');path=output/source.name
+    names=['hevc-main10-sdr.mp4','hevc-main10-pq.mp4','hevc-main10-hlg.mp4','libx264-96x128.mp4'] if hdr else [codec+'-'+size+'.mp4' for codec,size in [('libx264','128x96'),('libx264','96x128'),('libx265','128x96'),('libx265','96x128')]]
+    for name in names:
+        source=fixtures/name;path=output/source.name
         shutil.copy2(source,path);shutil.copy2(source.with_suffix('.json'),path.with_suffix('.json'));paths.append(path)
     return paths
 
@@ -119,10 +120,10 @@ def media_files(binary,output,paths):
     return verification
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--binary',type=pathlib.Path,required=True);parser.add_argument('--gui',action='store_true');args=parser.parse_args();binary=args.binary.resolve()
-    fault=os.environ.get('AIRPLAY_GPU_TEST_LOSS_AFTER_MS');output=ROOT/'rust-validation'/('gpu-loss' if fault else 'mirror-gui' if args.gui else 'mirror');output.mkdir(parents=True,exist_ok=True);config=output/'config';config.mkdir(exist_ok=True)
+    parser=argparse.ArgumentParser();parser.add_argument('--binary',type=pathlib.Path,required=True);parser.add_argument('--gui',action='store_true');parser.add_argument('--hdr',action='store_true');args=parser.parse_args();binary=args.binary.resolve()
+    fault=os.environ.get('AIRPLAY_GPU_TEST_LOSS_AFTER_MS');output=ROOT/'rust-validation'/(('gpu-loss' if fault else 'mirror-gui' if args.gui else 'mirror')+('-hdr' if args.hdr else ''));output.mkdir(parents=True,exist_ok=True);config=output/'config';config.mkdir(exist_ok=True)
     env=os.environ.copy();env['AIRPLAY_AUDIO_NULL']='1';env['RUST_LOG']='warn';port=7010
-    paths=generate_media(output)
+    paths=generate_media(output,args.hdr)
     (config/'settings.json').write_text(json.dumps({'vsync':False}))
     with (output/'receiver.log').open('w') as log:
         process=subprocess.Popen([str(binary),* ([] if args.gui else ['--headless']),'--port',str(port),'--config-dir',str(config),'--metrics',str(output/'metrics.json'),'--exit-after','8'],env=env,stdout=log,stderr=log)
@@ -136,6 +137,12 @@ def main():
         text=(output/'receiver.log').read_text();assert 'Synthetic acceptance fault' in text and 'GPU device reconstructed' in text,text
         assert metrics['presented_frames']>=80,metrics
     verification=media_files(binary,output,paths)
+    if args.hdr:
+        assert 'YUV420P10LE' in verification['validated_pixel_formats'],verification
+        assert {'Pq:800','Hlg:1000'}<=set(verification['colour_profiles']),verification
+        assert 'Video display:' not in (output/'receiver.log').read_text(),(output/'receiver.log').read_text()
+        if args.gui:
+            assert metrics['ten_bit_uploaded_frames']>=60 and metrics['hdr_uploaded_frames']>=40,metrics
     result={'protocol_checks':checks,'media':verification,'metrics':metrics,'synthetic_gpu_loss_recovery':bool(fault),'hardware_parity':'pending'}
     (output/'results.json').write_text(json.dumps(result,indent=2));print(json.dumps(result,indent=2))
 

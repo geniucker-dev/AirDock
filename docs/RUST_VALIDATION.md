@@ -7,8 +7,9 @@ and logs; do not infer physical hardware acceptance from a green build.
 
 ## Locally executed checks
 
-- Production shader offscreen readback: 18,816 RGB comparisons, maximum error
-  1/255. NV12/YUV420P, six SDR matrices, both ranges, linear/sRGB targets.
+- Production shader offscreen readback: 115,616 RGB comparisons, maximum error
+  1/255 locally. Includes the original 18,816 SDR comparisons and 96,800
+  additional 8/10-bit, PQ/HLG/SDR, gamut, static peak and format-switch comparisons.
   Adapter: Vulkan llvmpipe (software). This is a color result, not an FPS result.
 - Synthetic wgpu device destruction/reconstruction with continuing encrypted video.
 - Presentation lifecycle: receiving continues on settings/minimize/window close;
@@ -17,7 +18,8 @@ and logs; do not infer physical hardware acceptance from a green build.
   device conversion/draining but is not physical audio or WASAPI acceptance.
 - Rust unit regressions: ring concurrency, callback allocation/format/pause,
   generation isolation, protocol parsing/recovery, stride and format validation.
-  All 38 tests passed locally and in Windows debug/release builds.
+  The original 38 tests passed on Windows debug/release; current counts and
+  additional HDR tests are recorded in the final CI logs.
 - Encrypted mirroring and repeated reconnection integration fixtures.
 - HLS transport stream and fragmented MP4 decode, PCM counts and cancellation.
 - Iced Xvfb pages/settings/fullscreen/focus/resize regression.
@@ -58,6 +60,8 @@ Linux workspace. Therefore the following are **pending**, not passed:
 
 Software YUV download after hardware decode remains intentional. This version
 uses shared UI/video GPU rendering but does not implement zero-copy native NV12
-interop. Unsupported 10-bit/P010/HDR inputs show explicit errors. Video requires
+interop. P010/YUV420P10 and PQ/HLG now render through HDR-to-SDR mapping.
+Native Windows HDR output, Dolby Vision/HDR10+ dynamic metadata processing and
+12-bit/non-420/BT.2020 CL are not supported. See RUST_HDR.md. Video requires
 a compatible wgpu adapter; software UI fallback supports controls/audio and
 shows this limitation rather than displaying a blank successful video state.

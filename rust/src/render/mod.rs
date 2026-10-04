@@ -2,7 +2,8 @@ pub mod compositor;
 use crate::{
     media::{
         VideoFrame,
-        display::{self, Layout},
+        color::{self, Profile},
+        display::{self, Layout, Storage},
     },
     state::Shared,
 };
@@ -54,6 +55,10 @@ pub struct Uniforms {
     pub b: [f32; 4],
     pub options: [f32; 4],
     pub crop: [f32; 4],
+    pub gamut_r: [f32; 4],
+    pub gamut_g: [f32; 4],
+    pub gamut_b: [f32; 4],
+    pub hdr: [f32; 4],
 }
 #[derive(Clone, Copy)]
 struct PreparedFrame {
@@ -70,7 +75,10 @@ pub struct VideoPipeline {
     pub textures: Option<[wgpu::Texture; 3]>,
     pub bind: Option<wgpu::BindGroup>,
     format: wgpu::TextureFormat,
-    key: Option<(u32, u32, Layout)>,
+    key: Option<(u32, u32, Layout, Storage)>,
+    wide_pipeline: Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
+    color_lut: wgpu::Texture,
+    color_key: Option<Profile>,
     last: Option<(u64, u64)>,
     prepared: Option<PreparedFrame>,
     rejected: Option<(u64, u64)>,
@@ -80,74 +88,7 @@ pub struct VideoPipeline {
 }
 impl Pipeline for VideoPipeline {
     fn new(device: &wgpu::Device, _: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        let entries = (0..3)
-            .map(|binding| wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            })
-            .chain([
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ])
-            .collect::<Vec<_>>();
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("YUV planes"),
-            entries: &entries,
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("YUV pipeline"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("YUV SDR conversion"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("yuv.wgsl").into()),
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("YUV video"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview: None,
-            cache: None,
-        });
+        let (pipeline, layout) = make_pipeline(device, format, false);
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("YUV colour/crop uniforms"),
             size: std::mem::size_of::<Uniforms>() as u64,
@@ -160,15 +101,32 @@ impl Pipeline for VideoPipeline {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let color_lut = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Cached HDR transfer and tone curve"),
+            size: wgpu::Extent3d {
+                width: color::LUT_SIZE as u32,
+                height: 2,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
         Self {
             pipeline,
             layout,
             uniform,
             sampler,
+            color_lut,
             textures: None,
             bind: None,
             format,
             key: None,
+            wide_pipeline: None,
+            color_key: None,
             last: None,
             prepared: None,
             rejected: None,
@@ -178,7 +136,115 @@ impl Pipeline for VideoPipeline {
         }
     }
 }
+fn make_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    integer: bool,
+) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
+    let entries = (0..3)
+        .map(|binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: if integer {
+                    wgpu::TextureSampleType::Uint
+                } else {
+                    wgpu::TextureSampleType::Float { filterable: true }
+                },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        })
+        .chain([
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ])
+        .collect::<Vec<_>>();
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("YUV planes"),
+        entries: &entries,
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("YUV pipeline"),
+        bind_group_layouts: &[&layout],
+        push_constant_ranges: &[],
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("YUV SDR / HDR conversion"),
+        source: wgpu::ShaderSource::Wgsl(
+            include_str!("yuv.wgsl")
+                .replace("PLANE_TYPE", if integer { "u32" } else { "f32" })
+                .replace(
+                    "// PLANE_SAMPLE",
+                    if integer {
+                        include_str!("sample_10bit.wgsl")
+                    } else {
+                        include_str!("sample_8bit.wgsl")
+                    },
+                )
+                .into(),
+        ),
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("YUV video"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: Default::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        multiview: None,
+        cache: None,
+    });
+    (pipeline, layout)
+}
 impl VideoPipeline {
+    pub fn active_pipeline(&self) -> &wgpu::RenderPipeline {
+        if self.key.is_some_and(|k| k.3 != Storage::Byte) {
+            &self.wide_pipeline.as_ref().unwrap().0
+        } else {
+            &self.pipeline
+        }
+    }
     pub fn upload(
         &mut self,
         device: &wgpu::Device,
@@ -187,7 +253,11 @@ impl VideoPipeline {
         crop: [f32; 4],
     ) -> anyhow::Result<()> {
         let planes = display::describe(frame)?;
-        let key = (planes.width, planes.height, planes.layout);
+        let wide = planes.storage != Storage::Byte;
+        if wide && self.wide_pipeline.is_none() {
+            self.wide_pipeline = Some(make_pipeline(device, self.format, true));
+        }
+        let key = (planes.width, planes.height, planes.layout, planes.storage);
         if self.key != Some(key) {
             let textures = std::array::from_fn(|i| {
                 let mut p = planes.planes[i];
@@ -205,10 +275,11 @@ impl VideoPipeline {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: if i == 1 && planes.layout == Layout::Nv12 {
-                        wgpu::TextureFormat::Rg8Unorm
-                    } else {
-                        wgpu::TextureFormat::R8Unorm
+                    format: match (wide, i == 1 && planes.layout == Layout::Nv12) {
+                        (false, false) => wgpu::TextureFormat::R8Unorm,
+                        (false, true) => wgpu::TextureFormat::Rg8Unorm,
+                        (true, false) => wgpu::TextureFormat::R16Uint,
+                        (true, true) => wgpu::TextureFormat::Rg16Uint,
                     },
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
@@ -219,7 +290,11 @@ impl VideoPipeline {
                 .map(|t| t.create_view(&Default::default()));
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Reusable YUV bindings"),
-                layout: &self.layout,
+                layout: if wide {
+                    &self.wide_pipeline.as_ref().unwrap().1
+                } else {
+                    &self.layout
+                },
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -240,6 +315,12 @@ impl VideoPipeline {
                     wgpu::BindGroupEntry {
                         binding: 4,
                         resource: self.uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(
+                            &self.color_lut.create_view(&Default::default()),
+                        ),
                     },
                 ],
             });
@@ -294,6 +375,32 @@ impl VideoPipeline {
                 },
             );
         }
+        if self.color_key != Some(planes.color) {
+            if planes.color.mode() != 0. {
+                let table = planes.color.tables();
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &self.color_lut,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    bytemuck::cast_slice(&table),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some((color::LUT_SIZE * 4) as u32),
+                        rows_per_image: Some(2),
+                    },
+                    wgpu::Extent3d {
+                        width: color::LUT_SIZE as u32,
+                        height: 2,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            self.color_key = Some(planes.color);
+        }
+        let gamut = planes.color.gamut();
         let params = Uniforms {
             r: planes.matrix[0],
             g: planes.matrix[1],
@@ -305,10 +412,23 @@ impl VideoPipeline {
                     0.
                 },
                 if self.format.is_srgb() { 1. } else { 0. },
-                0.,
-                0.,
+                if wide { 1. / 1023. } else { 1. },
+                if planes.storage == Storage::P010 {
+                    1.
+                } else {
+                    0.
+                },
             ],
             crop,
+            gamut_r: gamut[0],
+            gamut_g: gamut[1],
+            gamut_b: gamut[2],
+            hdr: [
+                planes.color.mode(),
+                planes.color.peak,
+                color::SDR_PEAK as f32,
+                0.,
+            ],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&params));
         self.valid = true;
@@ -387,6 +507,28 @@ impl Primitive for VideoPrimitive {
                         pts: frame.pts,
                     });
                     self.shared.metrics.uploaded.fetch_add(1, Ordering::Relaxed);
+                    let depth = p.key.unwrap().3.depth();
+                    let mode = p.color_key.unwrap().mode() as u32;
+                    self.shared
+                        .metrics
+                        .video_depth
+                        .store(depth, Ordering::Relaxed);
+                    self.shared
+                        .metrics
+                        .video_colour_mode
+                        .store(mode, Ordering::Relaxed);
+                    if depth == 10 {
+                        self.shared
+                            .metrics
+                            .ten_bit_uploaded
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    if mode == 1 || mode == 2 {
+                        self.shared
+                            .metrics
+                            .hdr_uploaded
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
                     self.shared
                         .media
                         .display
@@ -431,7 +573,7 @@ impl Primitive for VideoPrimitive {
                 0.,
                 1.,
             );
-            pass.set_pipeline(&p.pipeline);
+            pass.set_pipeline(p.active_pipeline());
             pass.set_bind_group(0, bind, &[]);
             pass.draw(0..6, 0..1);
             // A submission counter, not a physical scanout/FPS measurement.
