@@ -114,13 +114,13 @@ def generate_media(output,hdr=False):
         shutil.copy2(source,path);shutil.copy2(source.with_suffix('.json'),path.with_suffix('.json'));paths.append(path)
     return paths
 
-def media_files(binary,output,paths):
-    example=binary.parent/'examples'/('media_verify.exe' if os.name=='nt' else 'media_verify')
+def media_files(binary,paths,verifier=None):
+    example=verifier.resolve() if verifier else binary.parent/'examples'/('media_verify.exe' if os.name=='nt' else 'media_verify')
     verification=json.loads(run(example,*paths));assert verification['decoded_frames']==120
     return verification
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--binary',type=pathlib.Path,required=True);parser.add_argument('--gui',action='store_true');parser.add_argument('--hdr',action='store_true');args=parser.parse_args();binary=args.binary.resolve()
+    parser=argparse.ArgumentParser();parser.add_argument('--binary',type=pathlib.Path,required=True);parser.add_argument('--gui',action='store_true');parser.add_argument('--hdr',action='store_true');parser.add_argument('--media-verifier',type=pathlib.Path,help='External test helper for validating a packaged receiver');args=parser.parse_args();binary=args.binary.resolve()
     fault=os.environ.get('AIRPLAY_GPU_TEST_LOSS_AFTER_MS');output=ROOT/'rust-validation'/(('gpu-loss' if fault else 'mirror-gui' if args.gui else 'mirror')+('-hdr' if args.hdr else ''));output.mkdir(parents=True,exist_ok=True);config=output/'config';config.mkdir(exist_ok=True)
     env=os.environ.copy();env['AIRPLAY_AUDIO_NULL']='1';env['RUST_LOG']='warn';port=7010
     paths=generate_media(output,args.hdr)
@@ -136,7 +136,7 @@ def main():
     if fault:
         text=(output/'receiver.log').read_text();assert 'Synthetic acceptance fault' in text and 'GPU device reconstructed' in text,text
         assert metrics['presented_frames']>=80,metrics
-    verification=media_files(binary,output,paths)
+    verification=media_files(binary,paths,args.media_verifier)
     if args.hdr:
         assert 'YUV420P10LE' in verification['validated_pixel_formats'],verification
         assert {'Pq:800','Hlg:1000'}<=set(verification['colour_profiles']),verification

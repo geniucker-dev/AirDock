@@ -77,6 +77,7 @@ pub struct VideoPipeline {
     format: wgpu::TextureFormat,
     key: Option<(u32, u32, Layout, Storage)>,
     wide_pipeline: Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
+    mapped_pipelines: [Option<wgpu::RenderPipeline>; 2],
     color_lut: wgpu::Texture,
     color_key: Option<Profile>,
     last: Option<(u64, u64)>,
@@ -88,7 +89,7 @@ pub struct VideoPipeline {
 }
 impl Pipeline for VideoPipeline {
     fn new(device: &wgpu::Device, _: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        let (pipeline, layout) = make_pipeline(device, format, false);
+        let (pipeline, layout) = make_pipeline(device, format, false, false, None);
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("YUV colour/crop uniforms"),
             size: std::mem::size_of::<Uniforms>() as u64,
@@ -126,6 +127,7 @@ impl Pipeline for VideoPipeline {
             format,
             key: None,
             wide_pipeline: None,
+            mapped_pipelines: Default::default(),
             color_key: None,
             last: None,
             prepared: None,
@@ -140,6 +142,8 @@ fn make_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
     integer: bool,
+    mapping: bool,
+    existing_layout: Option<&wgpu::BindGroupLayout>,
 ) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
     let entries = (0..3)
         .map(|binding| wgpu::BindGroupLayoutEntry {
@@ -185,9 +189,11 @@ fn make_pipeline(
             },
         ])
         .collect::<Vec<_>>();
-    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("YUV planes"),
-        entries: &entries,
+    let layout = existing_layout.cloned().unwrap_or_else(|| {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("YUV planes"),
+            entries: &entries,
+        })
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("YUV pipeline"),
@@ -205,6 +211,14 @@ fn make_pipeline(
                         include_str!("sample_10bit.wgsl")
                     } else {
                         include_str!("sample_8bit.wgsl")
+                    },
+                )
+                .replace(
+                    "// COLOUR_OUTPUT",
+                    if mapping {
+                        "rgb=colour_map(rgb); if params.options.y<0.5 {rgb=encoded(rgb);}"
+                    } else {
+                        "if params.options.y>0.5 {rgb=linear(rgb);}"
                     },
                 )
                 .into(),
@@ -239,7 +253,10 @@ fn make_pipeline(
 }
 impl VideoPipeline {
     pub fn active_pipeline(&self) -> &wgpu::RenderPipeline {
-        if self.key.is_some_and(|k| k.3 != Storage::Byte) {
+        let wide = self.key.is_some_and(|k| k.3 != Storage::Byte);
+        if self.color_key.is_some_and(|c| c.mode() != 0.) {
+            self.mapped_pipelines[usize::from(wide)].as_ref().unwrap()
+        } else if wide {
             &self.wide_pipeline.as_ref().unwrap().0
         } else {
             &self.pipeline
@@ -255,7 +272,16 @@ impl VideoPipeline {
         let planes = display::describe(frame)?;
         let wide = planes.storage != Storage::Byte;
         if wide && self.wide_pipeline.is_none() {
-            self.wide_pipeline = Some(make_pipeline(device, self.format, true));
+            self.wide_pipeline = Some(make_pipeline(device, self.format, true, false, None));
+        }
+        if planes.color.mode() != 0. && self.mapped_pipelines[usize::from(wide)].is_none() {
+            let layout = if wide {
+                &self.wide_pipeline.as_ref().unwrap().1
+            } else {
+                &self.layout
+            };
+            self.mapped_pipelines[usize::from(wide)] =
+                Some(make_pipeline(device, self.format, wide, true, Some(layout)).0);
         }
         let key = (planes.width, planes.height, planes.layout, planes.storage);
         if self.key != Some(key) {

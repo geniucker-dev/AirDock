@@ -56,9 +56,6 @@ fn colour_map(signal:vec3<f32>)->vec3<f32> {
     if params.options.x<0.5 {v=sample_plane(v_plane,input.uv).r;}
     let sample=vec4(vec3(y,uv.r,v)*params.options.z,1.);
     var rgb=clamp(vec3(dot(params.r,sample),dot(params.g,sample),dot(params.b,sample)),vec3(0.),vec3(1.));
-    if params.hdr.x>0.5 {
-        rgb=colour_map(rgb);
-        if params.options.y<0.5 {rgb=encoded(rgb);}
-    } else if params.options.y>0.5 {rgb=linear(rgb);}
+    // COLOUR_OUTPUT
     return vec4(rgb,1.);
 }

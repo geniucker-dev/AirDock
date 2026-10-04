@@ -37,6 +37,9 @@ whether the actual render target performs sRGB encoding itself.
 Transfer and tone curves use one 32 KiB, 4096×2 R32Float LUT. Tables are generated
 and uploaded only on metadata changes, with the ordinary SDR path bypassing LUT
 and tone operations. Integer pipelines, planes, bindings and tables are cached.
+Plain SDR and colour-mapped fragment pipelines are compiled separately. The plain
+SDR entry point has no HDR/LUT function calls or HDR branch, keeping those register
+and instruction costs out of ordinary 8-bit playback. Both pipelines share layouts.
 Scheduler intake measures actual backing allocations, including word formats and
 stride padding, and stops receiving when its frame/nominal byte budget is reached.
 Future/paused frames retain backpressure; shutdown releases blocked producers.
