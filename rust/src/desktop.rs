@@ -131,6 +131,7 @@ pub fn run() -> Result<()> {
             std::env::set_var("AIRPLAY_AUDIO_NULL", "1");
         }
     }
+    crate::platform::install_exit_handlers()?;
     let mut runtime = Runtime::start(directory.clone(), args.port, settings.clone())?;
     tracing::info!(
         "AirPlay listening on port {} as {}",
@@ -171,7 +172,7 @@ pub fn run() -> Result<()> {
             App::view,
         )
         .title(|_: &App, _| "AirPlay-Windows".to_owned())
-        .theme(|_: &App, _| Theme::TokyoNight)
+        .theme(|_: &App, _| desktop_theme())
         .subscription(App::subscription)
         .run()
         .map_err(Into::into)
@@ -378,7 +379,21 @@ impl App {
     }
     fn open_window(&mut self) -> Task<Message> {
         if let Some(id) = self.window {
-            return window::gain_focus(id);
+            self.minimized = false;
+            self.client
+                .shared
+                .media
+                .display
+                .visible
+                .store(self.page == 0 && !self.gpu_warning, Ordering::Release);
+            self.client.shared.ui.visible.store(true, Ordering::Release);
+            self.client
+                .shared
+                .metrics
+                .last_submission_us
+                .store(0, Ordering::Relaxed);
+            self.refresh();
+            return Task::batch([window::minimize(id, false), window::gain_focus(id)]);
         }
         let (id, task) = window::open(window::Settings {
             size: iced::Size::new(
@@ -478,6 +493,11 @@ impl App {
         match message {
             Message::Opened | Message::Frame | Message::Status => self.refresh(),
             Message::Tick => {
+                if crate::platform::exit_requested()
+                    || !self.client.shared.running.load(Ordering::Acquire)
+                {
+                    return Task::done(Message::Quit);
+                }
                 self.refresh();
                 if self.directory.join("restore-window").exists() {
                     let _ = std::fs::remove_file(self.directory.join("restore-window"));
@@ -485,7 +505,14 @@ impl App {
                 }
                 let gpu = render::compositor::STATUS.load(Ordering::Acquire);
                 if gpu == 3 {
-                    self.status.error="Video unavailable: no compatible GPU. Software fallback supports controls and audio only.".into()
+                    self.client
+                        .shared
+                        .media
+                        .display
+                        .visible
+                        .store(false, Ordering::Release);
+                    self.client.shared.report("Video unavailable: no compatible GPU. Software fallback supports controls and audio only.".into());
+                    self.status.error = self.client.shared.ui.lock().unwrap().error.clone();
                 }
                 if gpu == 5 {
                     self.status.error = "GPU device lost; recovery failed. The receiver and audio remain active. Restart the application to restore video.".into();
@@ -653,7 +680,15 @@ impl App {
 
             Message::Quit => return iced::exit(),
             Message::Disconnect => {
-                let _ = self.client.commands.try_send(runtime::Command::Disconnect);
+                let _ = self
+                    .client
+                    .commands
+                    .try_send(runtime::Command::Disconnect)
+                    .map_err(|e| {
+                        self.client
+                            .shared
+                            .report(format!("Could not disconnect: {e}"))
+                    });
             }
             Message::ClearError => self.client.shared.ui.lock().unwrap().error.clear(),
             Message::Save => {
@@ -671,7 +706,12 @@ impl App {
                     let _ = self
                         .client
                         .commands
-                        .try_send(runtime::Command::Settings(self.settings.clone()));
+                        .try_send(runtime::Command::Settings(self.settings.clone()))
+                        .map_err(|e| {
+                            self.client
+                                .shared
+                                .report(format!("Could not apply settings: {e}"))
+                        });
                 }
             }
             Message::Reset => {
@@ -729,12 +769,27 @@ impl App {
             widget::space().height(24),
             button("Receive")
                 .on_press(Message::Page(0))
+                .style(if self.page == 0 {
+                    button::primary
+                } else {
+                    button::text
+                })
                 .width(Length::Fill),
             button("Settings")
                 .on_press(Message::Page(1))
+                .style(if self.page == 1 {
+                    button::primary
+                } else {
+                    button::text
+                })
                 .width(Length::Fill),
             button("Diagnostics")
                 .on_press(Message::Page(2))
+                .style(if self.page == 2 {
+                    button::primary
+                } else {
+                    button::text
+                })
                 .width(Length::Fill),
             widget::space().height(Length::Fill),
             text("Service stays active\nin the system tray").size(12),
@@ -758,10 +813,10 @@ impl App {
                     if !self.status.artist.is_empty(){ready=ready.push(text(&self.status.artist));}
                     container(ready).center(Length::Fill).into()
                 };
-                column![row![text(if self.status.device.is_empty(){"Your screen, here"}else{&self.status.device}).size(24),widget::space().width(Length::Fill),button("Disconnect").on_press_maybe((!self.status.peer.is_empty()).then_some(Message::Disconnect))].spacing(12),container(video).width(Length::Fill).height(Length::Fill).style(|_|container::Style{background:Some(iced::Color::from_rgb8(9,12,20).into()),border:iced::Border{radius:12.into(),..Default::default()},..Default::default()}),row![button("Fullscreen · F11").on_press(Message::Fullscreen),button(if self.crop{"Fit"}else{"Fill / crop"}).on_press(Message::Crop),widget::space().width(Length::Fill),text("Volume"),slider(-60.0..=0.,self.status.volume_db,Message::Volume).width(140)].spacing(14).align_y(iced::Alignment::Center)].spacing(20).padding(24).into()
+                column![row![text(if self.status.device.is_empty(){"Your screen, here"}else{&self.status.device}).size(24),widget::space().width(Length::Fill),button("Disconnect").on_press_maybe((!self.status.peer.is_empty()).then_some(Message::Disconnect))].spacing(12),container(video).width(Length::Fill).height(Length::Fill).style(|_|container::Style{background:Some(iced::Color::from_rgb8(9,12,20).into()),border:iced::Border{radius:12.into(),..Default::default()},..Default::default()}),row![button("Fullscreen · F11").style(button::secondary).on_press(Message::Fullscreen),button(if self.crop{"Fit"}else{"Fill / crop"}).style(button::secondary).on_press(Message::Crop),widget::space().width(Length::Fill),text("Volume"),slider(-60.0..=0.,self.status.volume_db,Message::Volume).width(140)].spacing(14).align_y(iced::Alignment::Center)].spacing(20).padding(24).into()
             }
         };
-        let mut body = column![content].height(Length::Fill);
+        let mut body = column![content].height(Length::Fill).width(Length::Fill);
         if !self.status.error.is_empty() {
             body = body.push(
                 container(
@@ -775,7 +830,10 @@ impl App {
                 .style(container::rounded_box),
             );
         }
-        if self.focus && self.page == 0 {
+        if self.focus
+            && self.page == 0
+            && matches!(render::compositor::STATUS.load(Ordering::Acquire), 1 | 2)
+        {
             return container(if let Some(frame) = &self.frame {
                 Element::from(
                     widget::shader(render::Video {
@@ -796,8 +854,31 @@ impl App {
             .width(Length::Fill)
             .into();
         }
-        container(row![navigation, body].height(Length::Fill))
-            .height(Length::Fill)
-            .into()
+        container(
+            row![navigation, body]
+                .height(Length::Fill)
+                .width(Length::Fill),
+        )
+        .height(Length::Fill)
+        .into()
     }
+}
+
+fn desktop_theme() -> Theme {
+    static THEME: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
+    THEME
+        .get_or_init(|| {
+            Theme::custom(
+                "AirPlay",
+                iced::theme::Palette {
+                    background: iced::Color::from_rgb8(17, 21, 31),
+                    text: iced::Color::from_rgb8(221, 228, 244),
+                    primary: iced::Color::from_rgb8(116, 145, 250),
+                    success: iced::Color::from_rgb8(72, 197, 144),
+                    warning: iced::Color::from_rgb8(228, 180, 92),
+                    danger: iced::Color::from_rgb8(233, 121, 144),
+                },
+            )
+        })
+        .clone()
 }

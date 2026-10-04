@@ -248,3 +248,49 @@ pub fn decoder_adapter(vendor: u32, device: u32) -> Option<String> {
     }
     None
 }
+
+static EXIT_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn exit_requested() -> bool {
+    EXIT_REQUESTED.load(std::sync::atomic::Ordering::Acquire)
+}
+pub fn install_exit_handlers() -> Result<()> {
+    #[cfg(windows)]
+    {
+        unsafe extern "system" fn handler(kind: u32) -> windows::core::BOOL {
+            use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT};
+            if matches!(kind, CTRL_C_EVENT | CTRL_BREAK_EVENT) {
+                EXIT_REQUESTED.store(true, std::sync::atomic::Ordering::Release);
+                true.into()
+            } else {
+                false.into()
+            }
+        }
+        unsafe {
+            if windows::Win32::System::Console::GetConsoleCP() != 0 {
+                windows::Win32::System::Console::SetConsoleCtrlHandler(Some(handler), true)?;
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        extern "C" fn handler(_: libc::c_int) {
+            EXIT_REQUESTED.store(true, std::sync::atomic::Ordering::Release);
+        }
+        // Signal handlers perform only one lock-free atomic store. All cleanup
+        // takes place on normal runtime/UI threads, never inside the handler.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = handler as *const () as usize;
+            libc::sigemptyset(&mut action.sa_mask);
+            anyhow::ensure!(
+                libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut()) == 0,
+                "Could not install SIGINT handler"
+            );
+            anyhow::ensure!(
+                libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut()) == 0,
+                "Could not install SIGTERM handler"
+            );
+        }
+    }
+    Ok(())
+}

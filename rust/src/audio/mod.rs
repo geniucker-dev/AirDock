@@ -17,7 +17,7 @@ use std::{
 };
 
 enum Command {
-    Pcm(Vec<i16>, Option<i64>, u64, f32),
+    Pcm(Arc<Vec<i16>>, Option<i64>, u64, f32),
     Drain(mpsc::Sender<()>),
 }
 enum Control {
@@ -288,7 +288,13 @@ impl Sink {
         if pcm.is_empty() {
             return Ok(());
         }
-        let mut command = Command::Pcm(pcm.to_vec(), pts, self.epoch, self.gain);
+        self.push_shared(Arc::new(pcm.to_vec()), pts)
+    }
+    pub fn push_shared(&mut self, pcm: Arc<Vec<i16>>, pts: Option<i64>) -> Result<()> {
+        if pcm.is_empty() {
+            return Ok(());
+        }
+        let mut command = Command::Pcm(pcm, pts, self.epoch, self.gain);
         loop {
             match self.send.try_send(command) {
                 Ok(()) => return Ok(()),
@@ -470,8 +476,7 @@ impl Output {
         self.next_pts = pts - delay * 1_000_000 / rate as i64;
         self.last_gain = gain;
         self.last_epoch = epoch;
-        let mut output = frame::Audio::empty();
-        self.resampler.as_mut().unwrap().run(&input, &mut output)?;
+        let output = resample(self.resampler.as_mut().unwrap(), &input)?;
         self.enqueue(&output);
         self.pump();
         Ok(())
@@ -487,7 +492,7 @@ impl Output {
                 output.set_rate(self.config.sample_rate);
                 let delayed = self.resampler.as_mut().unwrap().flush(&mut output)?;
                 self.enqueue(&output);
-                if delayed.is_none() {
+                if delayed.is_none() || output.samples() == 0 {
                     break;
                 }
             }
@@ -535,6 +540,26 @@ impl Output {
             self.prefilled.store(true, Ordering::Release);
         }
     }
+}
+/// swr_convert_frame needs explicit output capacity when the device rate is higher
+/// than the source rate. Allocating only input.samples() would accumulate delay.
+pub(crate) fn resample(
+    context: &mut ffmpeg_next::software::resampling::Context,
+    input: &ffmpeg_next::frame::Audio,
+) -> Result<ffmpeg_next::frame::Audio> {
+    let capacity = unsafe {
+        ffmpeg_next::ffi::swr_get_out_samples(context.as_mut_ptr(), input.samples() as i32)
+    };
+    anyhow::ensure!(capacity >= 0, "Invalid resampler output capacity");
+    let definition = *context.output();
+    let mut output = ffmpeg_next::frame::Audio::new(
+        definition.format,
+        capacity.max(1) as usize,
+        definition.channel_layout,
+    );
+    output.set_rate(definition.rate);
+    context.run(input, &mut output)?;
+    Ok(output)
 }
 // Convert to the negotiated device format on the control thread, before publication.
 fn encode(value: f32, format: SampleFormat) -> u64 {
@@ -787,6 +812,41 @@ mod tests {
         assert_eq!(data, [0.25; 4]);
         assert!(c.clock.position(2).is_some());
         assert!(c.clock.position(1).is_none());
+    }
+    #[test]
+    fn higher_device_rate_does_not_accumulate_resampling_delay() {
+        use ffmpeg_next::{
+            ChannelLayout,
+            format::{Sample, sample::Type},
+            frame::Audio,
+            software::resampling::Context,
+        };
+        let mut context = Context::get(
+            Sample::I16(Type::Packed),
+            ChannelLayout::STEREO,
+            44100,
+            Sample::F32(Type::Packed),
+            ChannelLayout::STEREO,
+            48000,
+        )
+        .unwrap();
+        let mut total = 0;
+        for _ in 0..100 {
+            let mut input = Audio::new(Sample::I16(Type::Packed), 441, ChannelLayout::STEREO);
+            input.set_rate(44100);
+            input.data_mut(0).fill(0);
+            total += resample(&mut context, &input).unwrap().samples();
+            let delay = unsafe { ffmpeg_next::ffi::swr_get_delay(context.as_mut_ptr(), 44100) };
+            assert!(
+                delay < 64,
+                "Delay grew instead of remaining a fixed filter delay: {delay}"
+            );
+        }
+        let mut tail = Audio::new(Sample::F32(Type::Packed), 4096, ChannelLayout::STEREO);
+        tail.set_rate(48000);
+        context.flush(&mut tail).unwrap();
+        total += tail.samples();
+        assert_eq!(total, 48000);
     }
     #[test]
     fn endpoint_format_conversion_includes_unsigned_silence() {

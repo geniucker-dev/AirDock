@@ -120,8 +120,8 @@ def media_files(binary,output,paths):
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--binary',type=pathlib.Path,required=True);parser.add_argument('--gui',action='store_true');args=parser.parse_args();binary=args.binary.resolve()
-    output=ROOT/'rust-validation';output.mkdir(exist_ok=True);config=output/'headless';config.mkdir(exist_ok=True)
-    env=os.environ.copy();env['AIRPLAY_AUDIO_NULL']='1';port=7010
+    fault=os.environ.get('AIRPLAY_GPU_TEST_LOSS_AFTER_MS');output=ROOT/'rust-validation'/('gpu-loss' if fault else 'mirror-gui' if args.gui else 'mirror');output.mkdir(parents=True,exist_ok=True);config=output/'config';config.mkdir(exist_ok=True)
+    env=os.environ.copy();env['AIRPLAY_AUDIO_NULL']='1';env['RUST_LOG']='warn';port=7010
     paths=generate_media(output)
     (config/'settings.json').write_text(json.dumps({'vsync':False}))
     with (output/'receiver.log').open('w') as log:
@@ -132,8 +132,11 @@ def main():
             except subprocess.TimeoutExpired:process.kill();process.wait();raise
     metrics=json.loads((output/'metrics.json').read_text());assert metrics['audio_errors']==0,metrics;assert metrics['audio_packets']==64,metrics;assert metrics['decoded_frames']==120,metrics
     if args.gui:assert metrics['presented_frames']>0 and metrics['p95_receive_to_present_us']>0,metrics
+    if fault:
+        text=(output/'receiver.log').read_text();assert 'Synthetic acceptance fault' in text and 'GPU device reconstructed' in text,text
+        assert metrics['presented_frames']>=80,metrics
     verification=media_files(binary,output,paths)
-    result={'protocol_checks':checks,'media':verification,'metrics':metrics,'hardware_parity':'pending'}
+    result={'protocol_checks':checks,'media':verification,'metrics':metrics,'synthetic_gpu_loss_recovery':bool(fault),'hardware_parity':'pending'}
     (output/'results.json').write_text(json.dumps(result,indent=2));print(json.dumps(result,indent=2))
 
 if __name__=='__main__':main()

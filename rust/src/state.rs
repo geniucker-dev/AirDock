@@ -99,6 +99,7 @@ impl Shared {
             "submission_interval_sample_count":intervals.len(),
             "presentation_measurement":"GPU render submission, not physical display time",
             "uploaded_frames":m.uploaded.load(Ordering::Relaxed),
+            "pending_scheduled_frames":self.media.pending_frames(),
             "audio_underruns":self.media.audio_clock.underruns.load(Ordering::Relaxed),
             "audio_output_latency_us":self.media.audio_clock.output_latency_us.load(Ordering::Relaxed),"latency_sample_count":latency.len(),"latency_sample_window":4096,
             "hls_audio_samples_per_channel":m.hls_audio_samples.load(Ordering::Relaxed)})

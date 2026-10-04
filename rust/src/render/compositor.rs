@@ -133,6 +133,7 @@ pub struct GpuCompositor {
     lost: Arc<AtomicBool>,
     last_retry: Instant,
     retries: u8,
+    test_loss: Option<Instant>,
 }
 fn score(info: &wgpu::AdapterInfo) -> u8 {
     use wgpu::DeviceType::*;
@@ -161,6 +162,12 @@ impl GpuCompositor {
                 ..Default::default()
             })
             .await?;
+        let error_lost = lost.clone();
+        device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+            tracing::error!("GPU resource error: {error}");
+            error_lost.store(true, Ordering::Release);
+            STATUS.store(4, Ordering::Release);
+        }));
         device.set_device_lost_callback(move |reason, _| {
             if reason != wgpu::DeviceLostReason::Destroyed {
                 lost.store(true, Ordering::Release);
@@ -199,7 +206,7 @@ impl graphics::Compositor for GpuCompositor {
                 let format=capabilities.formats.iter().copied().find(|f|f.is_srgb()==graphics::color::GAMMA_CORRECTION).or(capabilities.formats.first().copied());
                 let Some(format)=format else{continue};let lost=Arc::new(AtomicBool::new(false));
                 match Self::engine(&adapter,format,settings,shell.clone(),lost.clone()).await {
-                    Ok((device,engine))=>{let info=adapter.get_info();VENDOR.store(info.vendor,Ordering::Release);DEVICE.store(info.device,Ordering::Release);STATUS.store(if info.device_type==wgpu::DeviceType::Cpu{2}else{1},Ordering::Release);tracing::info!("Render adapter: {} ({:?}, vendor {:x})",info.name,info.backend,info.vendor);return Ok(Self{instance,adapter,device,engine,format,settings,shell,lost,last_retry:Instant::now()-Duration::from_secs(5),retries:0});},
+                    Ok((device,engine))=>{let info=adapter.get_info();VENDOR.store(info.vendor,Ordering::Release);DEVICE.store(info.device,Ordering::Release);STATUS.store(if info.device_type==wgpu::DeviceType::Cpu{2}else{1},Ordering::Release);tracing::info!("Render adapter: {} ({:?}, vendor {:x})",info.name,info.backend,info.vendor);return Ok(Self{instance,adapter,device,engine,format,settings,shell,lost,last_retry:Instant::now()-Duration::from_secs(5),retries:0,test_loss:std::env::var("AIRPLAY_GPU_TEST_LOSS_AFTER_MS").ok().and_then(|s|s.parse::<u64>().ok()).map(|ms|Instant::now()+Duration::from_millis(ms))});},
                     Err(e)=>tracing::warn!("GPU initialization failed on {}: {e}",adapter.get_info().name),
                 }
             }
@@ -283,8 +290,19 @@ impl graphics::Compositor for GpuCompositor {
         c: core::Color,
         pre: impl FnOnce(),
     ) -> Result<(), compositor::SurfaceError> {
+        if self.test_loss.is_some_and(|at| Instant::now() >= at) {
+            self.test_loss = None;
+            tracing::warn!("Synthetic acceptance fault: destroying the wgpu device");
+            self.device.destroy();
+            self.lost.store(true, Ordering::Release);
+            STATUS.store(4, Ordering::Release);
+        }
         if self.lost.load(Ordering::Acquire) {
-            if self.last_retry.elapsed() < Duration::from_secs(1) || self.retries >= 3 {
+            if self.retries >= 3 {
+                STATUS.store(5, Ordering::Release);
+                return Err(compositor::SurfaceError::Timeout);
+            }
+            if self.last_retry.elapsed() < Duration::from_secs(1) {
                 return Err(compositor::SurfaceError::Timeout);
             }
             self.last_retry = Instant::now();
@@ -297,13 +315,20 @@ impl graphics::Compositor for GpuCompositor {
                 self.lost.clone(),
             )) {
                 Ok((device, engine)) => {
+                    tracing::warn!("GPU device reconstructed; rebuilding renderer resources");
                     self.device = device;
                     self.engine = engine;
                     self.lost.store(false, Ordering::Release);
                     *r = self.create_renderer();
                     self.configure_surface(s, s.width, s.height);
-                    STATUS.store(1, Ordering::Release);
-                    self.retries = 0;
+                    STATUS.store(
+                        if self.adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+                            2
+                        } else {
+                            1
+                        },
+                        Ordering::Release,
+                    );
                     return Err(compositor::SurfaceError::Lost);
                 }
                 Err(e) => {
@@ -314,6 +339,9 @@ impl graphics::Compositor for GpuCompositor {
                     return Err(compositor::SurfaceError::Timeout);
                 }
             }
+        }
+        if self.last_retry.elapsed() > Duration::from_secs(30) {
+            self.retries = 0;
         }
         iced_wgpu::window::compositor::present(&mut r.0, &mut s.raw, v, c, pre)
     }

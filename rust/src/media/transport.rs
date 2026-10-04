@@ -471,7 +471,10 @@ fn run_audio(
                         let active = payload_size >= 100 || pcm.iter().any(|s| *s != 0);
                         if active && now >= flush_until {
                             last_active = now;
-                            state.ui.lock().unwrap().paused = false;
+                            let mut ui = state.ui.lock().unwrap();
+                            if ui.paused {
+                                ui.paused = false;
+                            }
                         }
                         let pts = state
                             .media
@@ -483,7 +486,7 @@ fn run_audio(
                                     / rate as i64
                             });
                         sink.volume(state.ui.lock().unwrap().volume_db);
-                        sink.push_at(&pcm, pts)?;
+                        sink.push_shared(pcm.clone(), pts)?;
                         let stereo = if options.channels == 2 {
                             pcm
                         } else {

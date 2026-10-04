@@ -27,7 +27,7 @@ jobs:
         with:
           shared-key: iced-wgpu-cpal-profiles-v1-${{ hashFiles('rust/vcpkg.json', 'rust/native/**') }}
           env-vars: VCToolsVersion WindowsSDKVersion
-          cache-on-failure: false
+          cache-on-failure: true
       - name: Read native dependency baseline
         id: baseline
         shell: pwsh
@@ -62,6 +62,13 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m pip install cryptography Pillow pefile
+      - name: Audit native DLLs before caching
+        run: python tools/rust_native_audit.py --root "$env:RUST_NATIVE_ROOT/x64-windows" --output rust-validation/native-build-audit.json
+      - uses: actions/cache/save@v4
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ env.VCPKG_ROOT }}/installed
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Format and lint
         run: |
           cargo fmt --all -- --check
@@ -115,6 +122,7 @@ jobs:
           Copy-Item -Recurse "$env:RUST_NATIVE_ROOT/x64-windows/share" dist-rust/native-licenses
           Copy-Item "$env:RUST_NATIVE_ROOT/x64-windows/share/ffmpeg/ffmpeg-source.zip" dist-rust/sources/
           Copy-Item -Recurse rust/native/ports dist-rust/sources/native-build
+          Copy-Item -Recurse rust/native/triplets dist-rust/sources/native-triplets
           Copy-Item rust/vcpkg.json,rust-toolchain.toml dist-rust/sources/
           python tools/rust_dependency_licenses.py --output dist-rust/rust-licenses
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -129,11 +137,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "$env:pythonLocation/python.exe" tools/rust_hls_integration.py --fmp4 --binary dist-rust/airplay-windows.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: actions/cache/save@v4
-        if: steps.native-cache.outputs.cache-hit != 'true'
-        with:
-          path: ${{ env.VCPKG_ROOT }}/installed
-          key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         with:
           name: airplay-windows-rust-x64-${{ github.sha }}

@@ -36,13 +36,12 @@ impl Runtime {
         let identity = crypto::load_identity(&directory.join("identity.key"))?;
         let shared = Shared::new(settings);
         let server = Server::start(Device::new(identity, port, shared.clone())?)?;
-        let discovery = Discovery::start(server.device());
         let state = shared.clone();
         let (commands, receiver) = mpsc::sync_channel(16);
         let worker = thread::Builder::new()
             .name("receiver-runtime".into())
             .spawn(move || {
-                let mut discovery = match discovery {
+                let mut discovery = match Discovery::start(server.device()) {
                     Ok(d) => Some(d),
                     Err(e) => {
                         state.report(format!("Discovery unavailable: {e:#}"));
@@ -50,7 +49,7 @@ impl Runtime {
                     }
                 };
                 let mut last_devices = std::time::Instant::now() - Duration::from_secs(5);
-                while state.running.load(Ordering::Acquire) {
+                while state.running.load(Ordering::Acquire) && !platform::exit_requested() {
                     match receiver.recv_timeout(Duration::from_secs(1)) {
                         Ok(Command::Disconnect) => state.request_disconnect(),
                         Ok(Command::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => break,

@@ -9,6 +9,11 @@ acceptance from a green build.
 - Production shader offscreen readback: 18,816 RGB comparisons, maximum error
   1/255. NV12/YUV420P, six SDR matrices, both ranges, linear/sRGB targets.
   Adapter: Vulkan llvmpipe (software). This is a color result, not an FPS result.
+- Synthetic wgpu device destruction/reconstruction with continuing encrypted video.
+- Presentation lifecycle: receiving continues on settings/minimize/window close;
+  plane uploads stop, restoration resumes, software UI reports GPU requirements.
+- Virtual ALSA CPAL actor negotiated 48 kHz stereo from 44.1 kHz HLS; this exercises
+  device conversion/draining but is not physical audio or WASAPI acceptance.
 - Rust unit regressions: ring concurrency, callback allocation/format/pause,
   generation isolation, protocol parsing/recovery, stride and format validation.
 - Encrypted mirroring and repeated reconnection integration fixtures.

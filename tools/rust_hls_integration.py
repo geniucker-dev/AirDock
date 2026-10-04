@@ -14,9 +14,10 @@ from rust_integration import ROOT, pair, run, wait_listener
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', required=True, type=pathlib.Path)
+    parser.add_argument('--device-backend', action='store_true', help='Exercise CPAL with an explicitly configured virtual device; not physical audio acceptance')
     parser.add_argument('--fmp4',action='store_true')
     args = parser.parse_args()
-    output = ROOT / 'rust-validation' / 'hls'
+    output = ROOT / 'rust-validation' / ('hls-cpal' if args.device_backend else 'hls-fmp4' if args.fmp4 else 'hls-ts')
     output.mkdir(parents=True, exist_ok=True)
     import shutil
     fixtures=ROOT/'rust/tests/fixtures/media/hls'
@@ -27,7 +28,11 @@ def main():
                  prefix + 'video.m3u8': (output / ('fmp4.m3u8' if args.fmp4 else 'video.m3u8')).read_bytes().replace(b'#EXT-X-TARGETDURATION:0', b'#EXT-X-TARGETDURATION:1')}
     resources.update({prefix + p.name: p.read_bytes() for p in output.iterdir() if p.suffix in ['.ts','.m4s','.mp4']})
     env = os.environ.copy()
-    env['AIRPLAY_AUDIO_NULL'] = '1'
+    if args.device_backend:
+        env.pop('AIRPLAY_AUDIO_NULL', None)
+        env['RUST_LOG'] = 'info'
+    else:
+        env['AIRPLAY_AUDIO_NULL'] = '1'
     port = 7014
     session = 'rust-hls-fixture'
     headers = {'X-Apple-Session-ID': session, 'Content-Type': 'application/x-apple-binary-plist'}
@@ -125,6 +130,10 @@ def main():
                 process.kill()
                 process.wait()
                 raise
+    if args.device_backend:
+        log_text = (output / 'receiver.log').read_text()
+        assert 'Audio output opened: 48000 Hz, 2 channels' in log_text, log_text
+        assert 'Audio conversion:' not in log_text and 'Audio resampler drain:' not in log_text, log_text
     metrics = json.loads((output / 'metrics.json').read_text())
     assert metrics['decoded_frames'] == 30, metrics
     assert 40000 <= metrics['hls_audio_samples_per_channel'] <= 48000, metrics

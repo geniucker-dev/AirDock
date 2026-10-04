@@ -4,7 +4,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, SyncSender},
     },
     thread,
@@ -157,6 +157,7 @@ pub struct Playback {
     worker: Mutex<Option<thread::JoinHandle<()>>>,
     pub audio_sync: Mutex<Option<(u32, i64, u32)>>,
     sequence: AtomicU64,
+    pending: Arc<AtomicUsize>,
 }
 impl Playback {
     pub fn new(epoch: Arc<AtomicU64>, metrics: Arc<Metrics>) -> Self {
@@ -171,11 +172,14 @@ impl Playback {
             stop.clone(),
             metrics.clone(),
         );
+        let pending = Arc::new(AtomicUsize::new(0));
+        let queued = pending.clone();
         let worker = thread::Builder::new()
             .name("media-scheduler".into())
             .spawn(move || {
                 let mut queue = VecDeque::<VideoFrame>::new();
                 let mut anchor = None::<(u64, bool, i64, Instant)>;
+                let mut paused_at = None;
                 while !s.load(Ordering::Acquire) {
                     let wait = if c.paused.load(Ordering::Acquire) || queue.is_empty() {
                         Duration::from_millis(100)
@@ -215,9 +219,17 @@ impl Playback {
                     }
                     let epoch = e.load(Ordering::Acquire);
                     if c.paused.load(Ordering::Acquire) {
+                        paused_at.get_or_insert_with(Instant::now);
                         continue;
                     }
+                    if let Some(paused) = paused_at.take()
+                        && let Some((_, _, _, wall)) = anchor.as_mut()
+                    {
+                        *wall += paused.elapsed();
+                    }
+                    let before = queue.len();
                     queue.retain(|f| f.epoch == epoch);
+                    queued.fetch_sub(before - queue.len(), Ordering::Release);
                     let mut due = None;
                     while let Some(f) = queue.front() {
                         let pts = f.pts.map(MediaTime::micros);
@@ -250,11 +262,13 @@ impl Playback {
                             break;
                         }
                         if due.replace(queue.pop_front().unwrap()).is_some() {
+                            queued.fetch_sub(1, Ordering::Release);
                             m.schedule_dropped.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     if let Some(frame) = due {
                         d.publish(frame, &m);
+                        queued.fetch_sub(1, Ordering::Release);
                     }
                 }
             })
@@ -269,6 +283,7 @@ impl Playback {
             worker: Mutex::new(Some(worker)),
             audio_sync: Mutex::new(None),
             sequence: AtomicU64::new(0),
+            pending,
         }
     }
     pub fn sequence(&self) -> u64 {
@@ -281,6 +296,7 @@ impl Playback {
         }
         frame.sequence = self.sequence();
         self.metrics.decoded.fetch_add(1, Ordering::Relaxed);
+        self.pending.fetch_add(1, Ordering::Relaxed);
         loop {
             match self.sender.try_send(frame) {
                 Ok(()) => break,
@@ -289,12 +305,28 @@ impl Playback {
                     if self.stop.load(Ordering::Acquire)
                         || frame.epoch != self.epoch.load(Ordering::Acquire)
                     {
+                        self.pending.fetch_sub(1, Ordering::Release);
                         break;
                     }
                     thread::sleep(Duration::from_millis(2));
                 }
-                Err(_) => break,
+                Err(_) => {
+                    self.pending.fetch_sub(1, Ordering::Release);
+                    break;
+                }
             }
+        }
+    }
+    pub fn pending_frames(&self) -> usize {
+        self.pending.load(Ordering::Acquire)
+    }
+    pub fn drain(&self, epoch: u64, cancel: &AtomicBool) {
+        while self.pending_frames() != 0
+            && self.epoch.load(Ordering::Acquire) == epoch
+            && !self.stop.load(Ordering::Acquire)
+            && !cancel.load(Ordering::Acquire)
+        {
+            thread::sleep(Duration::from_millis(5));
         }
     }
     pub fn reset(&self) {
@@ -350,6 +382,82 @@ mod tests {
         assert!(c.position(4).is_none());
         c.invalidate();
         assert!(c.position(3).is_none());
+    }
+    #[test]
+    fn hls_future_frame_waits_for_audio_horizon_before_display_handoff() {
+        let epoch = Arc::new(AtomicU64::new(2));
+        let p = Playback::new(epoch, Arc::new(Metrics::default()));
+        p.audio_clock
+            .update(2, 500_000, p.audio_clock.now_us(), 0, 500_000);
+        p.submit(VideoFrame {
+            frame: ffmpeg_next::frame::Video::new(ffmpeg_next::format::Pixel::YUV420P, 16, 16),
+            received: Instant::now(),
+            pts: Some(MediaTime::microseconds(1_000_000)),
+            epoch: 2,
+            sequence: 0,
+            hls: true,
+        });
+        thread::sleep(Duration::from_millis(35));
+        assert!(p.display.latest.lock().unwrap().is_none());
+        assert_eq!(p.pending_frames(), 1);
+        p.audio_clock
+            .update(2, 1_000_000, p.audio_clock.now_us(), 0, 1_000_000);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while p.pending_frames() != 0 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(p.pending_frames(), 0);
+        assert_eq!(
+            p.display
+                .latest
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .pts
+                .unwrap()
+                .micros(),
+            1_000_000
+        );
+    }
+    #[test]
+    fn video_only_hls_pause_does_not_advance_the_monotonic_anchor() {
+        let p = Playback::new(Arc::new(AtomicU64::new(2)), Arc::new(Metrics::default()));
+        let frame = |pts| VideoFrame {
+            frame: ffmpeg_next::frame::Video::new(ffmpeg_next::format::Pixel::YUV420P, 16, 16),
+            received: Instant::now(),
+            pts: Some(MediaTime::microseconds(pts)),
+            epoch: 2,
+            sequence: 0,
+            hls: true,
+        };
+        p.submit(frame(0));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while p.display.latest.lock().unwrap().is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(2));
+        }
+        p.audio_clock.paused.store(true, Ordering::Release);
+        p.submit(frame(200_000));
+        thread::sleep(Duration::from_millis(250));
+        p.audio_clock.paused.store(false, Ordering::Release);
+        thread::sleep(Duration::from_millis(30));
+        assert_eq!(
+            p.display
+                .latest
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .pts
+                .unwrap()
+                .micros(),
+            0
+        );
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while p.pending_frames() != 0 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(p.pending_frames(), 0);
     }
     #[test]
     fn old_generation_cannot_enter_display() {

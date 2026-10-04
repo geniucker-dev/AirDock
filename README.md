@@ -5,6 +5,8 @@ and cpal/WASAPI audio. Receiving continues while its presentation window is
 minimized, closed or hidden in the Windows tray. Explicit Quit shuts down the
 service and its media workers.
 
+![Iced receiver](docs/validation/receiver.png)
+
 ## Features
 
 - Existing AirPlay pairing, encrypted mirroring, RTP audio recovery and session
@@ -29,16 +31,17 @@ still downloads to software YUV before upload: **this is not zero-copy**.
 
 ```text
 airplay-windows.exe
- airplay-windows.exe --hwaccel
- airplay-windows.exe --start-hidden
- airplay-windows.exe --headless --port 7000
+airplay-windows.exe --hwaccel
+airplay-windows.exe --start-hidden
+airplay-windows.exe --headless --port 7000
 ```
 
 Use the same LAN or Windows mobile hotspot, then select the receiver in your
 iPhone/iPad's Screen Mirroring menu. HLS/FCUP playback can be enabled in settings.
 Settings and identity use the existing application configuration directory.
 
-F11 toggles fullscreen. The Windows tray restores/hides the presentation window,
+F11 toggles fullscreen; Escape returns to the window. Ctrl+H hides/restores
+controls, Ctrl+D disconnects and Ctrl+Q quits. The Windows tray restores/hides the presentation window,
 disconnects the sender, or quits the whole application. Closing the window does
 not mean quitting the receiver.
 

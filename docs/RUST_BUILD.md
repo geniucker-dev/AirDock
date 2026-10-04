@@ -65,3 +65,16 @@ branch's Cargo application and only publishes after those gates pass. The
 workflow never selects the retired C++ or Slint source. Physical Windows/iPhone
 feature and performance acceptance remains separately recorded and cannot be
 inferred from runner/WARP/llvmpipe checks.
+
+
+The manifest's overlay triplet builds release DLLs only; Rust debug and release
+use those same playback DLLs through FFMPEG_DIR. The native cache is saved after
+actual DLL ABI/license/encoder/source checks, so later Rust lint/test failures do
+not force a second cold FFmpeg build. A restored cache must pass both that check
+and the independent final package audit. Cargo build caches are saved on failure;
+Cargo fingerprints and successful final builds remain mandatory before packaging.
+
+Corresponding build material includes `sources/native-build` (vcpkg ports),
+`sources/native-triplets`, the original manifest/toolchain and the FFmpeg source
+archive. To rebuild from a distribution, pass explicit overlay port/triplet paths
+matching those directory names when invoking the pinned vcpkg baseline.

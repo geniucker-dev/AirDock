@@ -711,6 +711,7 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
             let mut sink = audio::Sink::for_hls(44100, 2, &shared)?;
             let mut resampler = None::<ffmpeg::software::resampling::Context>;
             let mut epoch = shared.generation();
+            let mut pcm_next = None;
             while !audio_stop.load(Ordering::Acquire) && !global_stop.load(Ordering::Acquire) {
                 let (generation, packet) = match arx.recv_timeout(Duration::from_millis(100)) {
                     Ok(p) => p,
@@ -724,6 +725,7 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
                     epoch = generation;
                     decoder.flush();
                     resampler = None;
+                    pcm_next = None;
                     sink.set_epoch(epoch);
                     sink.flush();
                 }
@@ -740,6 +742,25 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
                             break;
                         }
                         Err(ffmpeg::Error::Eof) => {
+                            if let Some(resampler) = resampler.as_mut() {
+                                for _ in 0..8 {
+                                    let mut tail = frame::Audio::new(
+                                        ffmpeg::format::Sample::I16(
+                                            ffmpeg::format::sample::Type::Packed,
+                                        ),
+                                        4096,
+                                        ChannelLayout::STEREO,
+                                    );
+                                    tail.set_rate(44100);
+                                    resampler.flush(&mut tail)?;
+                                    if tail.samples() == 0 {
+                                        break;
+                                    }
+                                    hls_pcm(&tail, pcm_next, &mut sink, &shared)?;
+                                    pcm_next = pcm_next
+                                        .map(|p| p + tail.samples() as i64 * 1_000_000 / 44100);
+                                }
+                            }
                             sink.drain(&global_stop)?;
                             return Ok(());
                         }
@@ -772,22 +793,16 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
                             44100,
                         )?);
                     }
-                    let mut output = frame::Audio::empty();
-                    resampler.as_mut().unwrap().run(&frame, &mut output)?;
-                    let pcm = unsafe {
-                        std::slice::from_raw_parts(
-                            (*output.as_ptr()).data[0].cast::<i16>(),
-                            output.samples() * 2,
+                    let delay = unsafe {
+                        ffmpeg::ffi::swr_get_delay(
+                            resampler.as_mut().unwrap().as_mut_ptr(),
+                            frame.rate() as i64,
                         )
-                    }
-                    .to_vec();
-                    sink.volume(shared.ui.lock().unwrap().volume_db);
-                    sink.push_at(&pcm, pts)?;
-                    shared
-                        .metrics
-                        .hls_audio_samples
-                        .fetch_add((pcm.len() / 2) as u64, Ordering::Relaxed);
-                    shared.pcm(Arc::new(pcm), 44100);
+                    };
+                    let pts = pts.map(|p| p - delay * 1_000_000 / frame.rate() as i64);
+                    let output = crate::audio::resample(resampler.as_mut().unwrap(), &frame)?;
+                    hls_pcm(&output, pts, &mut sink, &shared)?;
+                    pcm_next = pts.map(|p| p + output.samples() as i64 * 1_000_000 / 44100);
                 }
             }
             Ok(())
@@ -934,6 +949,9 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
         }
         Ok(())
     })();
+    if result.is_err() {
+        inner.shared.reset_media();
+    }
     if result.is_err() || stop.load(Ordering::Acquire) || inner.stop.load(Ordering::Acquire) {
         local_stop.store(true, Ordering::Release);
     }
@@ -944,7 +962,37 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
     let audio_result = audio_worker
         .join()
         .map_err(|_| anyhow::anyhow!("HLS audio worker panicked"))?;
+    if result.is_ok() && demux_result.is_ok() && audio_result.is_ok() {
+        inner.shared.media.drain(inner.shared.generation(), stop);
+    }
     result.and(demux_result).and(audio_result)
+}
+
+fn hls_pcm(
+    output: &ffmpeg::frame::Audio,
+    pts: Option<i64>,
+    sink: &mut audio::Sink,
+    shared: &Arc<Shared>,
+) -> Result<()> {
+    if output.samples() == 0 {
+        return Ok(());
+    }
+    let pcm = Arc::new(
+        unsafe {
+            std::slice::from_raw_parts(
+                (*output.as_ptr()).data[0].cast::<i16>(),
+                output.samples() * 2,
+            )
+        }
+        .to_vec(),
+    );
+    sink.volume(shared.ui.lock().unwrap().volume_db);
+    shared
+        .metrics
+        .hls_audio_samples
+        .fetch_add(output.samples() as u64, Ordering::Relaxed);
+    shared.pcm(pcm.clone(), 44100);
+    sink.push_shared(pcm, pts)
 }
 
 #[cfg(test)]

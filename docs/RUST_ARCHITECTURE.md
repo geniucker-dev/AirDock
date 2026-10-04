@@ -54,7 +54,10 @@ video master; otherwise playback uses a monotonic PTS anchor. The display slot
 contains only the newest frame released by scheduling; future frames remain in
 a bounded scheduling queue. The mirrored audio producer uses a slow occupancy
 servo limited to 300 ppm, outside the real-time callback. HLS does not adjust
-rate based on how quickly its network source downloads.
+rate based on how quickly its network source downloads. The clock clamps to
+the last submitted PCM horizon during underflow. Natural HLS EOF drains both
+resampler/audio output and the video scheduling queue; cancellation/seek/FLUSH
+remain immediate generation changes.
 
 Reconnect, stream replacement, seek and FLUSH advance the media generation.
 Each packet/frame/PCM contribution carries its producer's generation. Audio
@@ -86,7 +89,9 @@ The owned compositor uses Iced's public Engine/Renderer interfaces. It chooses
 compatible adapters with a balanced integrated-GPU preference, exposes an
 explicit high-performance override, reuses the UI device/target, and attempts
 bounded device reconstruction after device loss. Surface reconfiguration is
-separate from device reconstruction. Software GPU adapters remain distinguishable
+separate from device reconstruction. D3D11VA attempts the DXGI adapter matching
+the render PCI vendor/device identity; NVDEC/CPU remain decode fallbacks. This
+is best-effort adapter matching, not a native GPU frame sharing interface. Software GPU adapters remain distinguishable
 from hardware. If GPU initialization fails, the software UI remains available
 with a clear video-support message; software UI does not secretly render the YUV
 primitive. Driver failures and cross-adapter cost still require physical Windows
