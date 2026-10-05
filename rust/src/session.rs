@@ -23,6 +23,9 @@ pub struct SessionOwner {
 /// Network ownership and cancellation, independent of any desktop window.
 pub struct Sessions {
     owner: Mutex<Option<Arc<SessionOwner>>>,
+    /// Observer snapshot; controls still authorize against the ownership gate.
+    /// Publish under `owner`, but never retain this lock during control/cleanup.
+    observed_protocol: Mutex<Option<ProtocolId>>,
     next_id: AtomicU64,
     pub running: AtomicBool,
     pub disconnect: AtomicU64,
@@ -38,6 +41,7 @@ impl Default for Sessions {
     fn default() -> Self {
         Self {
             owner: Mutex::new(None),
+            observed_protocol: Mutex::new(None),
             next_id: AtomicU64::new(1),
             running: AtomicBool::new(true),
             disconnect: AtomicU64::new(0),
@@ -62,7 +66,7 @@ impl Sessions {
         self.owner.lock().unwrap().as_ref().map(|o| o.id)
     }
     pub fn active_protocol(&self) -> Option<ProtocolId> {
-        self.owner.lock().unwrap().as_ref().map(|o| o.protocol)
+        *self.observed_protocol.lock().unwrap()
     }
     /// Serialize auxiliary playback controls with ownership handover. The closure
     /// must not claim/release/cancel a session or otherwise re-enter this gate.
@@ -129,6 +133,7 @@ impl Sessions {
             ready: Default::default(),
         });
         *owner = Some(lease.clone());
+        *self.observed_protocol.lock().unwrap() = Some(protocol);
         Some(lease)
     }
     /// Workers must be joined first. Keep the ownership gate closed until old
@@ -142,6 +147,7 @@ impl Sessions {
             self.end_video(lease.id);
             cleanup();
             *owner = None;
+            *self.observed_protocol.lock().unwrap() = None;
         }
         drop(owner);
         *lease.done.lock().unwrap() = true;
@@ -206,6 +212,38 @@ mod tests {
             policy,
             Duration::from_millis(50),
         )
+    }
+    #[test]
+    fn protocol_status_does_not_wait_for_an_in_flight_control() {
+        use std::sync::mpsc;
+        let sessions = Arc::new(Sessions::default());
+        let lease = claim(
+            &sessions,
+            ProtocolId::AIRPLAY,
+            "127.0.0.1".parse().unwrap(),
+            ReconnectPolicy::Reject,
+        )
+        .unwrap();
+        let (entered, ready) = mpsc::channel();
+        let (finish, wait) = mpsc::channel();
+        let controls = sessions.clone();
+        let control = std::thread::spawn(move || {
+            controls.with_protocol_control(ProtocolId::AIRPLAY, || {
+                entered.send(()).unwrap();
+                wait.recv().unwrap();
+            });
+        });
+        ready.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (reply, result) = mpsc::channel();
+        let status = sessions.clone();
+        let observer = std::thread::spawn(move || reply.send(status.active_protocol()).unwrap());
+        let observed = result.recv_timeout(Duration::from_secs(1));
+        finish.send(()).unwrap();
+        control.join().unwrap();
+        observer.join().unwrap();
+        assert_eq!(observed.ok(), Some(Some(ProtocolId::AIRPLAY)));
+        sessions.release(&lease, || {});
+        assert_eq!(sessions.active_protocol(), None);
     }
     #[test]
     fn auxiliary_controls_and_new_protocol_claims_cannot_cross_in_flight() {
