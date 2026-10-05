@@ -1,0 +1,286 @@
+{
+  "clipboard-win-5.4.1": {
+    "vcs_commit": "3b27cf2bfd1adcfa6e0264eb51c1025ddaf0f342",
+    "files": [
+      {
+        "file": "c9bff75738922193-LICENSE",
+        "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+        "source": "https://github.com/DoumanAsh/clipboard-win/blob/3b27cf2bfd1adcfa6e0264eb51c1025ddaf0f342/LICENSE"
+      }
+    ],
+    "declared_license": "BSL-1.0"
+  },
+  "dasp_sample-0.11.0": {
+    "vcs_commit": "97c3bb9b2363c0b46ac1633858bf1054fd02a980",
+    "files": [
+      {
+        "file": "756c8d2ab2dc24f2-LICENSE-APACHE",
+        "sha256": "756c8d2ab2dc24f256e1455b5f03937f4933d83d7bc9f2d55009fc962377d512",
+        "source": "https://github.com/rustaudio/sample/blob/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-APACHE"
+      },
+      {
+        "file": "b1d6df41ed3aa968-LICENSE-MIT",
+        "sha256": "b1d6df41ed3aa96806e74c729444d7c121d90e6660a6aed01d298e03fde475a0",
+        "source": "https://github.com/rustaudio/sample/blob/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-MIT"
+      }
+    ],
+    "declared_license": "MIT OR Apache-2.0"
+  },
+  "ffmpeg-sys-next-9.0.0": {
+    "vcs_commit": "80b7dd8327c3539159f37d8ca5423c75d6cd2e57",
+    "files": [
+      {
+        "file": "849a96cf934d162a-README.md",
+        "sha256": "849a96cf934d162a78f5649af9e6f0da38b380f1e30e1f72157aa0564d6382a9",
+        "source": "https://github.com/zmwangx/rust-ffmpeg-sys/blob/80b7dd8327c3539159f37d8ca5423c75d6cd2e57/README.md"
+      },
+      {
+        "file": "13d8825a59e5e546-WTFPL.txt",
+        "sha256": "13d8825a59e5e546d41e8711405d0f335a9934362a47c04a3b4280fa7932dc4a",
+        "source": "https://github.com/spdx/license-list-data/blob/31ba1a50e5397e00a304dbadc76531740e89ee48/text/WTFPL.txt"
+      }
+    ],
+    "declared_license": "WTFPL"
+  },
+  "gl_generator-0.14.0": {
+    "vcs_commit": "ea503e8d5fb6d73c6030e6191ce738cd3bf3433e",
+    "files": [
+      {
+        "file": "cfc7749b96f63bd3-LICENSE",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source": "https://github.com/brendanzab/gl-rs/blob/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/LICENSE"
+      }
+    ],
+    "declared_license": "Apache-2.0"
+  },
+  "gpu-alloc-0.6.2": {
+    "vcs_commit": "61020bdcb4eb04fca6bbf748aeb9570e859236e0",
+    "files": [
+      {
+        "file": "12121dfa58867700-COPYING",
+        "sha256": "12121dfa588677007848ab922a45a1e3248868f6ff063598fceb3141d7897314",
+        "source": "https://github.com/zakarumych/gpu-alloc/blob/61020bdcb4eb04fca6bbf748aeb9570e859236e0/COPYING"
+      }
+    ],
+    "declared_license": "MIT OR Apache-2.0"
+  },
+  "gpu-alloc-types-0.3.1": {
+    "vcs_commit": "7ddd1fe576fcfc503347eb97e476a47581479f22",
+    "files": [
+      {
+        "file": "12121dfa58867700-COPYING",
+        "sha256": "12121dfa588677007848ab922a45a1e3248868f6ff063598fceb3141d7897314",
+        "source": "https://github.com/zakarumych/gpu-alloc/blob/7ddd1fe576fcfc503347eb97e476a47581479f22/COPYING"
+      }
+    ],
+    "declared_license": "MIT OR Apache-2.0"
+  },
+  "gpu-descriptor-0.3.2": {
+    "vcs_commit": "bb28b4e55b742e0ea3e7a0968e7ee6287ba0e06a",
+    "files": [
+      {
+        "file": "f72143f7e9d9fb8b-COPYING",
+        "sha256": "f72143f7e9d9fb8bd336b139fa22f825a299591c29f2f7338c5566347b137613",
+        "source": "https://github.com/zakarumych/gpu-descriptor/blob/bb28b4e55b742e0ea3e7a0968e7ee6287ba0e06a/COPYING"
+      }
+    ],
+    "declared_license": "MIT OR Apache-2.0"
+  },
+  "gpu-descriptor-types-0.2.0": {
+    "vcs_commit": "9f2fb9546591322e7b77ee1e79385e01effd85e4",
+    "files": [
+      {
+        "file": "f72143f7e9d9fb8b-COPYING",
+        "sha256": "f72143f7e9d9fb8bd336b139fa22f825a299591c29f2f7338c5566347b137613",
+        "source": "https://github.com/zakarumych/gpu-descriptor/blob/9f2fb9546591322e7b77ee1e79385e01effd85e4/COPYING"
+      }
+    ],
+    "declared_license": "MIT OR Apache-2.0"
+  },
+  "hexf-parse-0.2.1": {
+    "vcs_commit": "4225763d744183d720f575ae96d04161b4d08ea0",
+    "files": [
+      {
+        "file": "425cb6fae64b193a-README.md",
+        "sha256": "425cb6fae64b193ab5342094774bc66b7d7b9276c7c43d9ac7ccca7063f4ed5b",
+        "source": "https://github.com/lifthrasiir/hexf/blob/4225763d744183d720f575ae96d04161b4d08ea0/README.md"
+      },
+      {
+        "file": "a2010f343487d3f7-CC0-1.0.txt",
+        "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+        "source": "https://github.com/spdx/license-list-data/blob/31ba1a50e5397e00a304dbadc76531740e89ee48/text/CC0-1.0.txt"
+      }
+    ],
+    "declared_license": "CC0-1.0"
+  },
+  "iced_core-0.14.0": {
+    "vcs_commit": "3997291f318a8bc06fa522f5579836fb3feb94df",
+    "files": [
+      {
+        "file": "fc9086ba4eba4b77-LICENSE",
+        "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398",
+        "source": "https://github.com/iced-rs/iced/blob/3997291f318a8bc06fa522f5579836fb3feb94df/LICENSE"
+      }
+    ],
+    "declared_license": "MIT"
+  },
+  "iced_debug-0.14.0": {
+    "vcs_commit": "3997291f318a8bc06fa522f5579836fb3feb94df",
+    "files": [
+      {
+        "file": "fc9086ba4eba4b77-LICENSE",
+        "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398",
+        "source": "https://github.com/iced-rs/iced/blob/3997291f318a8bc06fa522f5579836fb3feb94df/LICENSE"
+      }
+    ],
+    "declared_license": "MIT"
+  },
+  "iced_futures-0.14.0": {
+    "vcs_commit": "3997291f318a8bc06fa522f5579836fb3feb94df",
+    "files": [
+      {
+        "file": "fc9086ba4eba4b77-LICENSE",
+        "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398",
+        "source": "https://github.com/iced-rs/iced/blob/3997291f318a8bc06fa522f5579836fb3feb94df/LICENSE"
+      }
+    ],
+    "declared_license": "MIT"
+  },
+  "iced_graphics-0.14.0": {
+    "vcs_commit": "3997291f318a8bc06fa522f5579836fb3feb94df",
+    "files": [
+      {
+        "file": "fc9086ba4eba4b77-LICENSE",
+        "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398",
+        "source": "https://github.com/iced-rs/iced/blob/3997291f318a8bc06fa522f5579836fb3feb94df/LICENSE"
+      }
+    ],
+    "declared_license": "MIT"
+  },
+  "iced_program-0.14.0": {
+    "vcs_commit": "3997291f318a8bc06fa522f5579836fb3feb94df",
+    "files": [
+      {
+        "file": "fc9086ba4eba4b77-LICENSE",
+        "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398",
+        "source": "https://github.com/iced-rs/iced/blob/3997291f318a8bc06fa522f5579836fb3feb94df/LICENSE"
+      }
+    ],
+    "declared_license": "MIT"
+  },
+  "iced_renderer-0.14.0": {
+    "vcs_commit": "3997291f318a8bc06fa522f5579836fb3feb94df",
+    "files": [
+      {
+        "file": "fc9086ba4eba4b77-LICENSE",
+        "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398",
+        "source": "https://github.com/iced-rs/iced/blob/3997291f318a8bc06fa522f5579836fb3feb94df/LICENSE"
+      }
+    ],
+    "declared_license": "MIT"
+  },
+  "iced_runtime-0.14.0": {
+    "vcs_commit": "3997291f318a8bc06fa522f5579836fb3feb94df",
+    "files": [
+      {
+        "file": "fc9086ba4eba4b77-LICENSE",
+        "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398",
+        "source": "https://github.com/iced-rs/iced/blob/3997291f318a8bc06fa522f5579836fb3feb94df/LICENSE"
+      }
+    ],
+    "declared_license": "MIT"
+  },
+  "iced_tiny_skia-0.14.0": {
+    "vcs_commit": "3997291f318a8bc06fa522f5579836fb3feb94df",
+    "files": [
+      {
+        "file": "fc9086ba4eba4b77-LICENSE",
+        "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398",
+        "source": "https://github.com/iced-rs/iced/blob/3997291f318a8bc06fa522f5579836fb3feb94df/LICENSE"
+      }
+    ],
+    "declared_license": "MIT"
+  },
+  "iced_wgpu-0.14.0": {
+    "vcs_commit": "3997291f318a8bc06fa522f5579836fb3feb94df",
+    "files": [
+      {
+        "file": "fc9086ba4eba4b77-LICENSE",
+        "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398",
+        "source": "https://github.com/iced-rs/iced/blob/3997291f318a8bc06fa522f5579836fb3feb94df/LICENSE"
+      }
+    ],
+    "declared_license": "MIT"
+  },
+  "iced_widget-0.14.2": {
+    "vcs_commit": "54abf81d13fec06d4d9ac754b03ce2c3313e8a1f",
+    "files": [
+      {
+        "file": "fc9086ba4eba4b77-LICENSE",
+        "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398",
+        "source": "https://github.com/iced-rs/iced/blob/54abf81d13fec06d4d9ac754b03ce2c3313e8a1f/LICENSE"
+      }
+    ],
+    "declared_license": "MIT"
+  },
+  "iced_winit-0.14.1": {
+    "vcs_commit": "38237dd294da3256c2ac4d3f8288fc73956c91e0",
+    "files": [
+      {
+        "file": "fc9086ba4eba4b77-LICENSE",
+        "sha256": "fc9086ba4eba4b77e4c603906362742bc3715ffa2c7810c6074fe7780d3a0398",
+        "source": "https://github.com/iced-rs/iced/blob/38237dd294da3256c2ac4d3f8288fc73956c91e0/LICENSE"
+      }
+    ],
+    "declared_license": "MIT"
+  },
+  "khronos_api-3.1.0": {
+    "vcs_commit": "f150967b1c44ae888e6676f93f639ebc82771bdc",
+    "files": [
+      {
+        "file": "cfc7749b96f63bd3-LICENSE",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source": "https://github.com/brendanzab/gl-rs/blob/f150967b1c44ae888e6676f93f639ebc82771bdc/LICENSE"
+      }
+    ],
+    "declared_license": "Apache-2.0"
+  },
+  "profiling-1.0.18": {
+    "vcs_commit": "8271551172eb6fa4cba47369aedd93790c623df9",
+    "files": [
+      {
+        "file": "10d30a673cd5e934-LICENSE-APACHE",
+        "sha256": "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551",
+        "source": "https://github.com/aclysma/profiling/blob/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE"
+      },
+      {
+        "file": "c8167fdeeed46d3f-LICENSE-MIT",
+        "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333",
+        "source": "https://github.com/aclysma/profiling/blob/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT"
+      }
+    ],
+    "declared_license": "MIT OR Apache-2.0"
+  },
+  "spirv-0.3.0+sdk-1.3.268.0": {
+    "vcs_commit": "e91a5debc10c395b36db7721dfff6326d697a1e2",
+    "files": [
+      {
+        "file": "cfc7749b96f63bd3-LICENSE",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source": "https://github.com/gfx-rs/rspirv/blob/e91a5debc10c395b36db7721dfff6326d697a1e2/LICENSE"
+      }
+    ],
+    "declared_license": "Apache-2.0"
+  },
+  "svg_fmt-0.4.5": {
+    "vcs_commit": "93f414cd572b5c2781df93dbdc068ed13443d05a",
+    "files": [
+      {
+        "file": "7e98bed7f100747a-LICENSE",
+        "sha256": "7e98bed7f100747aaae7d82ab94fbe6b76fd6b84b09a3aaa413bff8196d0fbb1",
+        "source": "https://github.com/nical/rust_debug/blob/93f414cd572b5c2781df93dbdc068ed13443d05a/LICENSE"
+      }
+    ],
+    "declared_license": "MIT/Apache-2.0"
+  }
+}

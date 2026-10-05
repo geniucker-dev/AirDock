@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=AirDock
+Comment=AirPlay receiver for your desktop
+Exec=airdock
+Icon=airdock
+Terminal=false
+Categories=AudioVideo;Video;
+StartupWMClass=airdock
