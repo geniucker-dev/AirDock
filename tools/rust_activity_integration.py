@@ -7,6 +7,7 @@ import atexit
 import json
 import os
 import pathlib
+import signal
 import subprocess
 import time
 import rust_integration as media
@@ -34,19 +35,24 @@ def main():
         paths = media.generate_media(directory)
         with (directory / 'receiver.log').open('w') as log:
             env = os.environ.copy()
+            env.setdefault('RUST_LOG', 'airdock=debug,wgpu=warn')
             if state == 'software': env['ICED_BACKEND'] = 'tiny-skia'
             process = subprocess.Popen([str(binary), '--audio-null', '--port', '7014', '--config-dir', str(directory),
-                                        '--exit-after', '6', '--metrics', str(metrics)], stdout=log, stderr=log, env=env)
+                                        '--exit-after', '30', '--metrics', str(metrics)], stdout=log, stderr=log, env=env)
             try:
                 media.wait_listener(7014, process)
                 window = ''
-                for _ in range(60):
+                # Cold software GPU/font startup can outlive the old three-second
+                # wait. Keep it bounded, and stop if the receiver itself failed.
+                startup_deadline = time.monotonic() + 10
+                while time.monotonic() < startup_deadline:
+                    assert process.poll() is None, (directory / 'receiver.log').read_text()
                     found = subprocess.run(['xdotool', 'search', '--onlyvisible', '--name', 'AirDock'], text=True, stdout=subprocess.PIPE)
                     if found.stdout.strip():
                         window = found.stdout.strip().splitlines()[-1]
                         break
                     time.sleep(.05)
-                assert window
+                assert window, f'Iced window did not appear: {(directory / "receiver.log").read_text()}'
                 xdo('windowfocus', window)
                 time.sleep(.2)
                 if state == 'settings':
@@ -69,6 +75,10 @@ def main():
                     media.send_mirror(connection, key, paths[:1])
                 finally:
                     connection.close()
+                # End relative to completed assertions rather than a deadline
+                # starting before GPU initialization. SIGINT uses normal cleanup.
+                time.sleep(.5)
+                process.send_signal(signal.SIGINT)
                 assert process.wait(timeout=10) == 0
             finally:
                 if process.poll() is None:
