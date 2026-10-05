@@ -118,6 +118,12 @@ same-device physical acceptance described below.
 
 ## Remaining physical acceptance
 
+The latest-release comparison, its optimized builds, measured CPU/private RSS,
+new-frame submission counts and P95/P99 results are recorded in
+[Release performance comparison](RUST_PERFORMANCE_COMPARISON.md). It includes
+the status/control isolation fix and a final targeted rerun. This software-GPU
+evidence does not complete the physical acceptance below.
+
 No Windows/iPhone pair or physical audio/display hardware is attached to this
 Linux workspace. Therefore the following are **pending**, not passed:
 
