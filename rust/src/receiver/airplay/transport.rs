@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-use super::{VideoFrame, audio, video};
+use crate::media::{VideoFrame, audio, video};
 use crate::{crypto, rtp, state::Shared};
 use anyhow::{Result, ensure};
 use ctr::cipher::StreamCipher;
@@ -133,7 +133,7 @@ pub fn mirror(
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
     let state = shared.clone();
-    let owner_id = shared.owner.lock().unwrap().as_ref().map(|o| o.id);
+    let owner_id = shared.sessions.owner_id();
     let worker = Worker::start("mirror-video", shared, None, move |stop| {
         while !stop.load(Ordering::Acquire) {
             match listener.accept() {
@@ -151,7 +151,7 @@ pub fn mirror(
                         let mut decode_epoch = state.generation();
                         let mut announced_video = None;
                         loop {
-                            if state.owner.lock().unwrap().as_ref().map(|o| o.id) != owner_id {
+                            if state.sessions.owner_id() != owner_id {
                                 break;
                             }
                             let epoch = state.generation();
@@ -224,7 +224,10 @@ pub fn mirror(
                                                         pts,
                                                         epoch,
                                                         sequence: 0,
-                                                        hls: false,
+                                                        playback:
+                                                            crate::playback::PlaybackMode::Live,
+                                                        clock:
+                                                            crate::receiver::airplay::MIRROR_CLOCK,
                                                     });
                                                 }
                                             }
@@ -304,7 +307,12 @@ pub fn audio(
     let control = udp(peer)?;
     let data_port = data.local_addr()?.port();
     let control_port = control.local_addr()?.port();
-    let decoder = audio::Decoder::new(options.ct, options.rate, options.channels, options.spf)?;
+    let decoder = audio::Decoder::new(super::audio_configuration(
+        options.ct,
+        options.rate,
+        options.channels,
+        options.spf,
+    )?)?;
     let sink = audio::Sink::for_session(options.rate, options.channels, &shared)?;
     let poller = Arc::new(Poller::new()?);
     let wake = poller.clone();
@@ -354,6 +362,7 @@ fn run_audio(
         let mut last_active = 0u64;
         let mut flush_until = 0u64;
         let mut timestamp: Option<u32> = None;
+        let mut audio_sync: Option<(u64, u32, i64, u32)> = None;
         let mut last_normal = 0u64;
         let mut bytes = [0; 65536];
         let mut events = Events::new();
@@ -368,6 +377,7 @@ fn run_audio(
                         sink.set_epoch(state.generation());
                         sink.flush();
                         timestamp = None;
+                        audio_sync = None;
                         flush_until = now + 500;
                         last_request = 0;
                     }
@@ -386,8 +396,12 @@ fn run_audio(
                                 let rtp = u32::from_be_bytes(bytes[4..8].try_into()?);
                                 let ntp = u64::from_be_bytes(bytes[8..16].try_into()?);
                                 if let Some(time) = crate::playback::MediaTime::ntp(ntp) {
-                                    *state.media.audio_sync.lock().unwrap() =
-                                        Some((rtp, time.micros(), options.rate));
+                                    audio_sync = Some((
+                                        state.generation(),
+                                        rtp,
+                                        time.micros(),
+                                        options.rate,
+                                    ));
                                 }
                                 continue;
                             }
@@ -479,12 +493,9 @@ fn run_audio(
                                 ui.paused = false;
                             }
                         }
-                        let pts = state
-                            .media
-                            .audio_sync
-                            .lock()
-                            .unwrap()
-                            .map(|(rtp, us, rate)| {
+                        let pts = audio_sync
+                            .filter(|(generation, _, _, _)| *generation == state.generation())
+                            .map(|(_, rtp, us, rate)| {
                                 us + (packet.timestamp.wrapping_sub(rtp) as i32 as i64) * 1_000_000
                                     / rate as i64
                             });
@@ -533,13 +544,13 @@ mod tests {
     use ffmpeg_next as ffmpeg;
     fn encode_alac(value: i16) -> Vec<u8> {
         match value {
-            10 => include_bytes!("../../tests/fixtures/alac-10.bin").as_slice(),
-            20 => include_bytes!("../../tests/fixtures/alac-20.bin").as_slice(),
-            30 => include_bytes!("../../tests/fixtures/alac-30.bin").as_slice(),
-            50 => include_bytes!("../../tests/fixtures/alac-50.bin").as_slice(),
-            55 => include_bytes!("../../tests/fixtures/alac-55.bin").as_slice(),
-            60 => include_bytes!("../../tests/fixtures/alac-60.bin").as_slice(),
-            99 => include_bytes!("../../tests/fixtures/alac-99.bin").as_slice(),
+            10 => include_bytes!("../../../tests/fixtures/alac-10.bin").as_slice(),
+            20 => include_bytes!("../../../tests/fixtures/alac-20.bin").as_slice(),
+            30 => include_bytes!("../../../tests/fixtures/alac-30.bin").as_slice(),
+            50 => include_bytes!("../../../tests/fixtures/alac-50.bin").as_slice(),
+            55 => include_bytes!("../../../tests/fixtures/alac-55.bin").as_slice(),
+            60 => include_bytes!("../../../tests/fixtures/alac-60.bin").as_slice(),
+            99 => include_bytes!("../../../tests/fixtures/alac-99.bin").as_slice(),
             _ => panic!("Missing test fixture"),
         }
         .to_vec()
@@ -672,11 +683,11 @@ mod tests {
         for (spf, fixture) in [
             (
                 480,
-                include_bytes!("../../tests/fixtures/eld-480.bin").as_slice(),
+                include_bytes!("../../../tests/fixtures/eld-480.bin").as_slice(),
             ),
             (
                 512,
-                include_bytes!("../../tests/fixtures/eld-512.bin").as_slice(),
+                include_bytes!("../../../tests/fixtures/eld-512.bin").as_slice(),
             ),
         ] {
             let mut rest = fixture;
@@ -688,7 +699,10 @@ mod tests {
             }
             for ct in [4, 8] {
                 let (shared, sender, data, _, stream) = setup("127.0.0.1", ct, spf);
-                let mut reference = audio::Decoder::new(ct, 44100, 2, spf).unwrap();
+                let mut reference = audio::Decoder::new(
+                    super::super::audio_configuration(ct, 44100, 2, spf).unwrap(),
+                )
+                .unwrap();
                 let mut pcm = Vec::new();
                 for (i, payload) in packets.iter().enumerate() {
                     let decoded = reference.decode(payload).unwrap();

@@ -2,9 +2,8 @@
 pub mod audio;
 pub mod color;
 pub mod display;
-pub mod transport;
 pub mod video;
-use crate::playback::MediaTime;
+use crate::playback::{ClockRelation, MediaTime, PlaybackMode};
 use ffmpeg_next as ffmpeg;
 use std::time::Instant;
 
@@ -15,7 +14,8 @@ pub struct VideoFrame {
     pub pts: Option<MediaTime>,
     pub epoch: u64,
     pub sequence: u64,
-    pub hls: bool,
+    pub playback: PlaybackMode,
+    pub clock: ClockRelation,
 }
 impl VideoFrame {
     pub fn shared(&self) -> anyhow::Result<Self> {
@@ -27,7 +27,8 @@ impl VideoFrame {
             pts: self.pts,
             epoch: self.epoch,
             sequence: self.sequence,
-            hls: self.hls,
+            playback: self.playback,
+            clock: self.clock,
         })
     }
 }

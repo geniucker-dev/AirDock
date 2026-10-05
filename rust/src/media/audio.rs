@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-use anyhow::{Result, bail, ensure};
+use anyhow::{Result, ensure};
 use ffmpeg_next::{
     self as ffmpeg, ChannelLayout, codec,
     format::{Sample, sample::Type},
@@ -61,6 +61,14 @@ pub fn extradata(context: &mut codec::Context, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Codec setup after protocol negotiation; no AirPlay wire codec IDs here.
+pub struct Configuration {
+    pub codec: codec::Id,
+    pub extradata: Vec<u8>,
+    pub rate: u32,
+    pub channels: u8,
+}
+
 pub struct Decoder {
     decoder: codec::decoder::Audio,
     resampler: Option<ffmpeg::software::resampling::Context>,
@@ -68,37 +76,17 @@ pub struct Decoder {
     channels: u8,
 }
 impl Decoder {
-    pub fn new(ct: u64, rate: u32, channels: u8, spf: u32) -> Result<Self> {
+    pub fn new(config: Configuration) -> Result<Self> {
+        let (rate, channels) = (config.rate, config.channels);
+        ensure!((7350..=96000).contains(&rate), "Invalid audio sample rate");
         ensure!(
             matches!(channels, 1 | 2),
             "Only mono and stereo audio are supported"
         );
-        let id = match ct {
-            2 => codec::Id::ALAC,
-            3 | 4 | 8 => codec::Id::AAC,
-            _ => bail!("Unsupported AirPlay audio codec {ct}"),
-        };
-        let codec =
-            codec::decoder::find(id).ok_or_else(|| anyhow::anyhow!("Audio decoder missing"))?;
+        let codec = codec::decoder::find(config.codec)
+            .ok_or_else(|| anyhow::anyhow!("Audio decoder missing"))?;
         let mut context = codec::Context::new_with_codec(codec);
-        let config = if ct == 2 {
-            alac_config(rate, channels, if spf == 0 { 352 } else { spf })
-        } else if ct == 3 {
-            let i = [
-                96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000,
-                7350,
-            ]
-            .iter()
-            .position(|r| *r == rate)
-            .ok_or_else(|| anyhow::anyhow!("Unsupported AAC rate"))?;
-            vec![
-                (2 << 3) | (i as u8 >> 1),
-                ((i as u8 & 1) << 7) | (channels << 3),
-            ]
-        } else {
-            eld_config(rate, channels, spf)?
-        };
-        extradata(&mut context, &config)?;
+        extradata(&mut context, &config.extradata)?;
         unsafe {
             let c = context.as_mut_ptr();
             (*c).sample_rate = rate as i32;

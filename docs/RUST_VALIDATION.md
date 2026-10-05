@@ -88,6 +88,31 @@ A package is validated only when that workflow and the final DLL audit succeed.
 Linux development uses system FFmpeg; its license/configuration do not certify
 Windows release DLLs.
 
+## Protocol adapter extraction (2026-10-05)
+
+Linux validation of this extraction passed formatting, warning-free Clippy,
+80 library tests plus 2 updater tests, binary/example builds and the unchanged
+dependency policy (539 packages; no retired GUI/audio dependencies). New tests
+cover multiple backend lifecycle/failure isolation, duplicate registration,
+cross-protocol ownership, reconnect/retirement, stale teardown, clock mapping
+and local AirPlay shutdown with another protocol holding the playback lease.
+
+Existing synthetic encrypted H.264/HEVC mirror, 10-bit/HDR mirror, RAOP/FLUSH,
+13 reconnect scenarios, SIGINT/SIGTERM cleanup, HLS TS and fMP4 passed. Xvfb/
+llvmpipe checks passed rendered mirroring, all 390 reconnect frames submitted,
+receive/settings/hidden/restored/software-fallback activity and idle-CPU checks.
+The shader oracle passed 115,616 checks with maximum error 1/255.
+
+Three alternating Xvfb/llvmpipe runs per binary compared the exact pre-extraction
+commit `7eeadf0` with this implementation, using the same 120-frame synthetic
+low-resolution mirror input. Median GPU submissions were 120 for both; median
+per-run processing P95 was 3.069 / 3.174 ms and P99 was 8.113 / 8.401 ms
+(before / after). Submission-interval P95 was 34.761 / 34.494 ms and P99 was
+36.468 / 40.214 ms. This short software-GPU smoke comparison does not establish
+physical display FPS/latency, long-term drift, resource parity, Windows hardware
+performance, or comparison against the original C++ receiver. Those require the
+same-device physical acceptance described below.
+
 ## Remaining physical acceptance
 
 No Windows/iPhone pair or physical audio/display hardware is attached to this

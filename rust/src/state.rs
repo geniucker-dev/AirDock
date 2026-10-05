@@ -19,7 +19,6 @@ pub struct Shared {
     #[cfg(test)]
     pub test_pcm: Mutex<Vec<i16>>,
 }
-pub use crate::session::SessionOwner;
 impl std::ops::Deref for Shared {
     type Target = crate::session::Sessions;
     fn deref(&self) -> &Self::Target {
@@ -62,7 +61,7 @@ impl Shared {
         epoch
     }
     pub fn request_disconnect(&self) {
-        self.disconnect.fetch_add(1, Ordering::Relaxed);
+        self.sessions.cancel();
         self.reset_media();
     }
     pub fn report(&self, error: String) {
@@ -95,6 +94,7 @@ impl Shared {
             .collect::<Vec<_>>();
         intervals.sort_unstable();
         serde_json::json!({"elapsed_seconds":self.started.elapsed().as_secs_f64(),
+            "active_protocol":self.sessions.active_protocol().map(|p|p.0),
             "idle_inhibition_supported":cfg!(windows),
             "idle_inhibition_active":self.sessions.idle_inhibited.load(Ordering::Acquire),
             "decoded_frames":m.decoded.load(Ordering::Relaxed),

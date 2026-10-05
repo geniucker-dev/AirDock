@@ -977,7 +977,8 @@ fn playback(url: &str, inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Result<()>
                     pts,
                     epoch,
                     sequence: 0,
-                    hls: true,
+                    playback: crate::playback::PlaybackMode::Timed,
+                    clock: crate::playback::ClockRelation::SharedTimeline,
                 });
             }
         }

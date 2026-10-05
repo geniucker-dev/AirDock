@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 use crate::{
     crypto::{FairPlay, PairVerify},
-    media::transport::{self, AudioCommand, AudioOptions, AudioStream, Worker},
     protocol::{self, Reader, Request, Response, dict, integer, string, uint},
-    state::{SessionOwner, Shared, UiState},
+    receiver::{
+        ProtocolId,
+        airplay::transport::{self, AudioCommand, AudioOptions, AudioStream, Worker},
+    },
+    session::{ReconnectPolicy, SessionOwner},
+    state::{Shared, UiState},
 };
 use anyhow::{Context, Result, bail, ensure};
 use ed25519_dalek::SigningKey;
@@ -14,7 +18,10 @@ use std::{
     collections::BTreeMap,
     io::Cursor,
     net::{SocketAddr, TcpListener, TcpStream, UdpSocket},
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::Duration,
 };
@@ -152,30 +159,36 @@ fn receiver_uuid(public_key: &[u8; 32], domain: &[u8]) -> String {
 pub struct Server {
     device: Arc<Device>,
     thread: Option<thread::JoinHandle<()>>,
+    stop: Arc<AtomicBool>,
 }
 impl Server {
-    pub fn start(device: Device) -> Result<Self> {
+    pub fn start(mut device: Device) -> Result<Self> {
         let listener = listen(device.port)?;
+        device.port = listener.local_addr()?.port();
         let device = Arc::new(device);
         let d = device.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
         let thread = thread::Builder::new()
             .name("airplay-listener".into())
             .spawn(move || {
                 let mut children: Vec<thread::JoinHandle<()>> = Vec::new();
-                let mut id = 0u64;
-                while d.shared.running.load(Ordering::Acquire) {
+                while d.shared.running.load(Ordering::Acquire) && !flag.load(Ordering::Acquire) {
                     match listener.accept() {
                         Ok((stream, peer)) => {
                             children.retain(|child| !child.is_finished());
                             if children.len() >= 32 {
                                 continue;
                             }
-                            id = id.wrapping_add(1);
+                            let id = d.shared.sessions.allocate_id();
+                            let session_stop = flag.clone();
                             let device = d.clone();
                             if let Ok(child) = thread::Builder::new()
                                 .name("airplay-session".into())
                                 .spawn(move || {
-                                    if let Err(e) = connection(stream, peer, id, device) {
+                                    if let Err(e) =
+                                        connection(stream, peer, id, device, session_stop)
+                                    {
                                         tracing::debug!("Session ended: {e:#}");
                                     }
                                 })
@@ -192,6 +205,7 @@ impl Server {
                         }
                     }
                 }
+                flag.store(true, Ordering::Release);
                 for child in children {
                     let _ = child.join();
                 }
@@ -199,6 +213,7 @@ impl Server {
         Ok(Self {
             device,
             thread: Some(thread),
+            stop,
         })
     }
     pub fn device(&self) -> &Arc<Device> {
@@ -207,7 +222,7 @@ impl Server {
 }
 impl Drop for Server {
     fn drop(&mut self) {
-        self.device.shared.running.store(false, Ordering::Release);
+        self.stop.store(true, Ordering::Release);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -251,39 +266,18 @@ struct Session {
 }
 impl Session {
     fn claim(&mut self) -> Result<bool> {
-        let previous = self.device.shared.owner.lock().unwrap().clone();
-        if let Some(previous) = previous {
-            if previous.id == self.id {
-                return Ok(true);
-            }
-            if previous.peer != self.peer.ip() {
-                return Ok(false);
-            }
-            // iOS reconnects with a fresh TCP session before closing the old
-            // one. Retire its media workers completely before accepting new
-            // packets; unrelated senders still receive a busy response.
-            previous.stop.store(true, Ordering::Release);
-            let done = previous.done.lock().unwrap();
-            let (done, _) = previous
-                .ready
-                .wait_timeout_while(done, Duration::from_secs(2), |d| !*d)
-                .unwrap();
-            if !*done {
-                return Ok(false);
-            }
+        if let Some(lease) = &self.lease {
+            return Ok(!lease.stop.load(Ordering::Acquire));
         }
-        let mut owner = self.device.shared.owner.lock().unwrap();
-        if owner.is_some() {
+        let Some(lease) = self.device.shared.sessions.claim(
+            self.id,
+            ProtocolId::AIRPLAY,
+            self.peer.ip(),
+            ReconnectPolicy::ReplaceSamePeer,
+            Duration::from_secs(2),
+        ) else {
             return Ok(false);
-        }
-        let lease = Arc::new(SessionOwner {
-            id: self.id,
-            peer: self.peer.ip(),
-            stop: Default::default(),
-            done: Mutex::new(false),
-            ready: Default::default(),
-        });
-        *owner = Some(lease.clone());
+        };
         self.device.shared.reset_media();
         self.lease = Some(lease);
         self.claimed = true;
@@ -294,33 +288,48 @@ impl Session {
         self.mirror = None;
         self.timing = None;
         self.legacy.clear();
-        let mut owner = self.device.shared.owner.lock().unwrap();
-        if owner.as_ref().is_some_and(|owner| owner.id == self.id) {
-            self.device.shared.sessions.end_video(self.id);
-            *owner = None;
-            {
-                let mut ui = self.device.shared.ui.lock().unwrap();
-                let usb = ui.usb;
-                let addresses = ui.addresses.clone();
-                *ui = UiState {
-                    usb,
-                    addresses,
-                    ..Default::default()
-                };
-            }
-            self.device.shared.reset_media();
-            drop(owner);
-            self.device.hls.stop();
+        if let Some(lease) = self.lease.take() {
+            self.device.shared.sessions.release(&lease, || {
+                {
+                    let mut ui = self.device.shared.ui.lock().unwrap();
+                    let usb = ui.usb;
+                    let addresses = ui.addresses.clone();
+                    *ui = UiState {
+                        usb,
+                        addresses,
+                        ..Default::default()
+                    };
+                }
+                self.device.shared.reset_media();
+                self.device.hls.stop();
+            });
         }
         self.claimed = false;
-        if let Some(lease) = self.lease.take() {
-            *lease.done.lock().unwrap() = true;
-            lease.ready.notify_all();
-        }
     }
     fn route(&mut self, req: &Request) -> Result<Response> {
         let path = req.path();
         let method = req.method.as_str();
+        // Auxiliary AirPlay control connections may exist without a media lease.
+        // They must not pause/reset playback owned by another protocol.
+        if self
+            .device
+            .shared
+            .sessions
+            .active_protocol()
+            .is_some_and(|p| p != ProtocolId::AIRPLAY)
+            && matches!(
+                (method, path),
+                (
+                    "POST",
+                    "/audioMode" | "/action" | "/stop" | "/rate" | "/scrub" | "/setProperty"
+                )
+            )
+        {
+            return Ok(Response {
+                status: 503,
+                ..Response::ok()
+            });
+        }
         match (method,path) {
             ("OPTIONS",_)=>return Ok(Response::ok().header("Public","ANNOUNCE, SETUP, RECORD, PAUSE, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, POST, GET")),
             ("GET","/info")=>return Response::ok().plist(self.device.info()),
@@ -352,7 +361,7 @@ impl Session {
                 }else{let body=String::from_utf8_lossy(&req.body);(body.lines().find_map(|s|s.strip_prefix("Content-Location:")).context("Missing playback URL")?.trim().into(),0.)};
                 self.device.hls.play(req.header("x-apple-session-id"),&url,position)?;
                 self.device.shared.sessions.end_video(self.id);
-                self.device.shared.sessions.begin_hls_video(self.id);
+                self.device.shared.sessions.begin_timed_video(self.id);
                 {let mut ui=self.device.shared.ui.lock().unwrap();ui.peer=self.peer.ip().to_string();ui.kind="HLS playback".into();}
                 return Ok(Response::ok());
             },
@@ -656,7 +665,13 @@ impl Drop for Session {
         self.device.hls.remove_reverse(self.id);
     }
 }
-fn connection(mut stream: TcpStream, peer: SocketAddr, id: u64, device: Arc<Device>) -> Result<()> {
+fn connection(
+    mut stream: TcpStream,
+    peer: SocketAddr,
+    id: u64,
+    device: Arc<Device>,
+    stop: Arc<AtomicBool>,
+) -> Result<()> {
     // Accept inherits nonblocking mode on Windows; timeout-based reads must
     // block between requests instead of spinning on WouldBlock.
     stream.set_nonblocking(false)?;
@@ -690,6 +705,7 @@ fn connection(mut stream: TcpStream, peer: SocketAddr, id: u64, device: Arc<Devi
         lease: None,
     };
     while device.shared.running.load(Ordering::Acquire)
+        && !stop.load(Ordering::Acquire)
         && generation == device.shared.disconnect.load(Ordering::Acquire)
         && !session
             .lease

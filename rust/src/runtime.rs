@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 use crate::{
     config::{Settings, WindowPreferences},
-    crypto,
-    discovery::{Discovery, advertisement_changed},
     platform,
-    server::{Device, Server},
+    receiver::{Backends, airplay::AirPlay},
     state::Shared,
 };
 use anyhow::Result;
@@ -49,9 +47,9 @@ pub struct Runtime {
 }
 impl Runtime {
     pub fn start(directory: PathBuf, port: u16, settings: Settings) -> Result<Self> {
-        let identity = crypto::load_identity(&directory.join("identity.key"))?;
         let shared = Shared::new(settings);
-        let server = Server::start(Device::new(identity, port, shared.clone())?)?;
+        let mut backends = Backends::default();
+        backends.add(Box::new(AirPlay::bind(&directory, port, shared.clone())?))?;
         let state = shared.clone();
         let (commands, receiver) = mpsc::sync_channel(16);
         let worker = thread::Builder::new()
@@ -60,17 +58,17 @@ impl Runtime {
                 // Windows execution state belongs to this thread, never to the window.
                 let mut inhibitor: platform::power::Inhibitor = Default::default();
                 let mut last_power_error = None;
-                let mut discovery = match Discovery::start(server.device()) {
-                    Ok(d) => Some(d),
-                    Err(e) => {
-                        state.report(format!("Discovery unavailable: {e:#}"));
-                        None
-                    }
-                };
+                let initial = state.settings.read().unwrap().clone();
+                for error in backends.refresh(&initial, &initial) {
+                    state.report(error);
+                }
                 let mut last_devices = std::time::Instant::now() - Duration::from_secs(5);
                 while state.running.load(Ordering::Acquire) && !platform::exit_requested() {
                     match receiver.recv_timeout(Duration::from_secs(1)) {
-                        Ok(Command::Disconnect) => state.request_disconnect(),
+                        Ok(Command::Disconnect) => {
+                            state.request_disconnect();
+                            backends.disconnect();
+                        }
                         Ok(Command::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         Ok(Command::Settings(mut settings, reply)) => {
                             let result = (|| -> Result<()> {
@@ -91,21 +89,9 @@ impl Runtime {
                                     }
                                     return Err(error);
                                 }
-                                let restart_discovery = discovery.is_none()
-                                    || discovery
-                                        .as_ref()
-                                        .is_some_and(Discovery::registration_failed)
-                                    || advertisement_changed(&current, &settings);
-                                *state.settings.write().unwrap() = settings;
-                                if restart_discovery {
-                                    // Complete withdrawal before publishing a replacement.
-                                    drop(discovery.take());
-                                    match Discovery::start(server.device()) {
-                                        Ok(d) => discovery = Some(d),
-                                        Err(e) => state.report(format!(
-                                            "Settings saved; discovery unavailable: {e:#}"
-                                        )),
-                                    }
+                                *state.settings.write().unwrap() = settings.clone();
+                                for error in backends.refresh(&current, &settings) {
+                                    state.report(format!("Settings saved; {error}"));
                                 }
                                 Ok(())
                             })();
@@ -160,9 +146,9 @@ impl Runtime {
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
                     }
-                    let inhibit = state
-                        .sessions
-                        .needs_video_inhibition(|| server.device().hls.is_playing());
+                    let inhibit = state.sessions.needs_video_inhibition(|| {
+                        backends.timed_video_playing(state.sessions.active_protocol())
+                    });
                     match inhibitor.update(inhibit) {
                         Ok(()) => last_power_error = None,
                         Err(error) => {
@@ -205,8 +191,8 @@ impl Runtime {
                     .sessions
                     .idle_inhibited
                     .store(false, Ordering::Release);
-                drop(discovery);
-                drop(server);
+                backends.disconnect();
+                backends.shutdown();
                 state.media.stop();
             })?;
         Ok(Self {

@@ -15,6 +15,7 @@ pub mod state;
 pub mod audio;
 pub mod platform;
 pub mod playback;
+pub mod receiver;
 pub mod render;
 pub mod runtime;
 pub mod session;

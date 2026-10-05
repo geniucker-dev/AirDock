@@ -66,7 +66,7 @@ struct PreparedFrame {
     sequence: u64,
     received: Instant,
     pts: Option<crate::playback::MediaTime>,
-    hls: bool,
+    clock: crate::playback::ClockRelation,
 }
 pub struct VideoPipeline {
     pub pipeline: wgpu::RenderPipeline,
@@ -532,7 +532,7 @@ impl Primitive for VideoPrimitive {
                         sequence: frame.sequence,
                         received: frame.received,
                         pts: frame.pts,
-                        hls: frame.hls,
+                        clock: frame.clock,
                     });
                     self.shared.metrics.uploaded.fetch_add(1, Ordering::Relaxed);
                     let depth = p.key.unwrap().3.depth();
@@ -621,13 +621,7 @@ impl Primitive for VideoPrimitive {
                         .media
                         .audio_clock
                         .position(frame.epoch)
-                        .and_then(|audio| {
-                            if frame.hls {
-                                pts.micros().checked_sub(audio)
-                            } else {
-                                crate::playback::mirror_av_offset(pts.micros(), audio)
-                            }
-                        })
+                        .and_then(|audio| frame.clock.offset(pts.micros(), audio))
                 });
                 if let Some(offset) = offset {
                     self.shared

@@ -29,6 +29,55 @@ fn intake_available(queue: &VecDeque<VideoFrame>) -> bool {
     queue.len() < 8 && queue.iter().map(frame_bytes).sum::<u64>() < 48 * 1024 * 1024
 }
 
+/// A playback policy, not a wire protocol or container format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PlaybackMode {
+    /// Interactive mirror: release decoded frames immediately.
+    Live,
+    /// Buffered media: schedule by PTS against audible PCM or a monotonic anchor.
+    Timed,
+}
+
+/// The adapter establishes the relationship between video and audio timestamps.
+/// Unmapped source clocks must not be reported as an AV offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClockRelation {
+    SharedTimeline,
+    Unmapped,
+    EpochAligned {
+        epoch_offset_us: i64,
+        max_skew_us: u64,
+    },
+}
+impl ClockRelation {
+    pub fn offset(self, video_us: i64, audio_us: i64) -> Option<i64> {
+        if self == Self::Unmapped {
+            return None;
+        }
+        let delta = video_us.checked_sub(audio_us)?;
+        match self {
+            Self::SharedTimeline => Some(delta),
+            Self::Unmapped => None,
+            Self::EpochAligned {
+                epoch_offset_us,
+                max_skew_us,
+            } => [
+                Some(0),
+                Some(epoch_offset_us),
+                epoch_offset_us.checked_neg(),
+            ]
+            .into_iter()
+            .flatten()
+            .find_map(|adjustment| {
+                delta
+                    .checked_add(adjustment)
+                    .filter(|offset| offset.unsigned_abs() <= max_skew_us)
+            }),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MediaTime {
     pub ticks: i64,
@@ -56,23 +105,6 @@ impl MediaTime {
             )
         })
     }
-}
-
-/// AirPlay mirror timestamps may use Unix seconds, whereas RAOP sync uses NTP
-/// seconds since 1900. Correct only the known epoch difference near a plausible
-/// live offset; arbitrary/missing clocks must never produce a displayed estimate.
-pub fn mirror_av_offset(video_us: i64, audio_us: i64) -> Option<i64> {
-    const EPOCH_US: i64 = 2_208_988_800_000_000;
-    const LIVE_BOUND_US: i64 = 10_000_000;
-    let delta = video_us.checked_sub(audio_us)?;
-    for adjustment in [0, EPOCH_US, -EPOCH_US] {
-        if let Some(offset) = delta.checked_add(adjustment)
-            && offset.unsigned_abs() <= LIVE_BOUND_US as u64
-        {
-            return Some(offset);
-        }
-    }
-    None
 }
 
 /// Snapshot of the estimated audible PCM position, never the ring write position.
@@ -197,7 +229,6 @@ pub struct Playback {
     epoch: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     worker: Mutex<Option<thread::JoinHandle<()>>>,
-    pub audio_sync: Mutex<Option<(u32, i64, u32)>>,
     sequence: AtomicU64,
     pending: Arc<AtomicUsize>,
 }
@@ -220,7 +251,7 @@ impl Playback {
             .name("media-scheduler".into())
             .spawn(move || {
                 let mut queue = VecDeque::<VideoFrame>::new();
-                let mut anchor = None::<(u64, bool, i64, Instant)>;
+                let mut anchor = None::<(u64, PlaybackMode, i64, Instant)>;
                 let mut paused_at = None;
                 while !s.load(Ordering::Acquire) {
                     let wait = if c.paused.load(Ordering::Acquire) || queue.is_empty() {
@@ -228,7 +259,11 @@ impl Playback {
                     } else {
                         let delta = queue
                             .front()
-                            .and_then(|f| f.hls.then_some(f.pts).flatten())
+                            .and_then(|f| {
+                                (f.playback == PlaybackMode::Timed)
+                                    .then_some(f.pts)
+                                    .flatten()
+                            })
                             .map(|pts| {
                                 let media_now =
                                     c.position(e.load(Ordering::Acquire)).or_else(|| {
@@ -278,17 +313,17 @@ impl Playback {
                         let now = Instant::now();
                         // Mirror frames are interactive: sender NTP is telemetry,
                         // not permission to wait for the buffered audio horizon.
-                        // Only HLS uses PTS scheduling and audio as its master clock.
-                        let target = if f.hls
+                        // Timed playback uses PTS scheduling and audio as its master clock.
+                        let target = if f.playback == PlaybackMode::Timed
                             && let Some(pts) = pts
                         {
                             let (ae, ah, base, wall) =
-                                *anchor.get_or_insert((epoch, f.hls, pts, now));
+                                *anchor.get_or_insert((epoch, f.playback, pts, now));
                             if ae != epoch
-                                || ah != f.hls
+                                || ah != f.playback
                                 || (pts - base).unsigned_abs() > 3_600_000_000
                             {
-                                anchor = Some((epoch, f.hls, pts, now));
+                                anchor = Some((epoch, f.playback, pts, now));
                                 continue;
                             }
                             let media_now = c
@@ -323,7 +358,6 @@ impl Playback {
             epoch,
             stop,
             worker: Mutex::new(Some(worker)),
-            audio_sync: Mutex::new(None),
             sequence: AtomicU64::new(0),
             pending,
         }
@@ -382,7 +416,6 @@ impl Playback {
         self.audio_clock.invalidate();
         self.audio_clock.paused.store(false, Ordering::Release);
         self.display.clear();
-        *self.audio_sync.lock().unwrap() = None;
     }
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
@@ -401,6 +434,25 @@ impl Drop for Playback {
 mod tests {
     use super::*;
     #[test]
+    fn protocol_clock_mapping_is_explicit_and_unknown_clocks_have_no_estimate() {
+        let unix = 1_800_000_000_000_000;
+        let ntp = unix + 2_208_988_800_000_000;
+        assert_eq!(
+            ClockRelation::SharedTimeline.offset(170_000, 100_000),
+            Some(70_000)
+        );
+        // A shared Cast/MPEG timeline must not receive AirPlay's epoch correction.
+        assert_eq!(
+            ClockRelation::SharedTimeline.offset(unix, ntp),
+            Some(-2_208_988_800_000_000)
+        );
+        assert_eq!(ClockRelation::Unmapped.offset(170_000, 100_000), None);
+        assert_eq!(
+            ClockRelation::SharedTimeline.offset(i64::MAX, i64::MIN),
+            None
+        );
+    }
+    #[test]
     fn hidden_mailbox_wakes_only_for_the_first_frame_or_reset() {
         use futures::{FutureExt, StreamExt};
         let mailbox = DisplayMailbox::default();
@@ -413,7 +465,8 @@ mod tests {
             pts: None,
             epoch: 1,
             sequence,
-            hls: false,
+            playback: crate::playback::PlaybackMode::Live,
+            clock: crate::receiver::airplay::MIRROR_CLOCK,
         };
         mailbox.publish(frame(1), &metrics);
         assert_eq!(receiver.next().now_or_never(), Some(Some(())));
@@ -454,7 +507,8 @@ mod tests {
                     pts: Some(MediaTime::microseconds(10_000_000)),
                     epoch: 2,
                     sequence: 0,
-                    hls: true,
+                    playback: crate::playback::PlaybackMode::Timed,
+                    clock: crate::playback::ClockRelation::SharedTimeline,
                 });
                 count.fetch_add(1, Ordering::Release);
             }
@@ -482,12 +536,30 @@ mod tests {
     fn mirror_av_epoch_normalization_and_unknown_clock() {
         let unix = 1_800_000_000_000_000;
         let ntp = unix + 2_208_988_800_000_000;
-        assert_eq!(mirror_av_offset(unix + 83_500, ntp), Some(83_500));
-        assert_eq!(mirror_av_offset(ntp - 50_000, unix), Some(-50_000));
-        assert_eq!(mirror_av_offset(ntp + 25_000, ntp), Some(25_000));
-        assert_eq!(mirror_av_offset(123_000, ntp), None);
-        assert_eq!(mirror_av_offset(i64::MIN, i64::MAX), None);
-        assert_eq!(mirror_av_offset(i64::MIN, 0), None);
+        assert_eq!(
+            crate::receiver::airplay::MIRROR_CLOCK.offset(unix + 83_500, ntp),
+            Some(83_500)
+        );
+        assert_eq!(
+            crate::receiver::airplay::MIRROR_CLOCK.offset(ntp - 50_000, unix),
+            Some(-50_000)
+        );
+        assert_eq!(
+            crate::receiver::airplay::MIRROR_CLOCK.offset(ntp + 25_000, ntp),
+            Some(25_000)
+        );
+        assert_eq!(
+            crate::receiver::airplay::MIRROR_CLOCK.offset(123_000, ntp),
+            None
+        );
+        assert_eq!(
+            crate::receiver::airplay::MIRROR_CLOCK.offset(i64::MIN, i64::MAX),
+            None
+        );
+        assert_eq!(
+            crate::receiver::airplay::MIRROR_CLOCK.offset(i64::MIN, 0),
+            None
+        );
     }
     #[test]
     fn rational_pts_and_ntp_keep_precision() {
@@ -533,7 +605,8 @@ mod tests {
             pts: Some(MediaTime::microseconds(1_000_000)),
             epoch: 2,
             sequence: 0,
-            hls: true,
+            playback: crate::playback::PlaybackMode::Timed,
+            clock: crate::playback::ClockRelation::SharedTimeline,
         });
         thread::sleep(Duration::from_millis(35));
         assert!(p.display.latest.lock().unwrap().is_none());
@@ -567,7 +640,8 @@ mod tests {
             pts: Some(MediaTime::microseconds(pts)),
             epoch: 2,
             sequence: 0,
-            hls: true,
+            playback: crate::playback::PlaybackMode::Timed,
+            clock: crate::playback::ClockRelation::SharedTimeline,
         };
         p.submit(frame(0));
         let deadline = Instant::now() + Duration::from_secs(1);
@@ -609,7 +683,8 @@ mod tests {
             pts: Some(MediaTime::microseconds(90_000)),
             epoch: 2,
             sequence: 0,
-            hls: false,
+            playback: crate::playback::PlaybackMode::Live,
+            clock: crate::receiver::airplay::MIRROR_CLOCK,
         });
         let mailbox = p.display.latest.lock().unwrap();
         let (mailbox, _) = p
@@ -632,7 +707,8 @@ mod tests {
             pts: None,
             epoch: 1,
             sequence: 0,
-            hls: false,
+            playback: crate::playback::PlaybackMode::Live,
+            clock: crate::receiver::airplay::MIRROR_CLOCK,
         });
         assert_eq!(p.metrics.stale_dropped.load(Ordering::Relaxed), 1);
         assert!(p.display.latest.lock().unwrap().is_none());

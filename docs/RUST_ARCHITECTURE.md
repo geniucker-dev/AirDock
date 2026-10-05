@@ -7,20 +7,26 @@ cancellation shuts down discovery, sessions, audio actors and media scheduling.
 ## Runtime and media pipeline
 
 ```text
-Runtime -> Server / discovery / platform monitoring
-              |              |
-          protocol       Sessions (ownership, cancellation, generation)
-              `------ media decode / demux ------'
-                       |                 |
-                audio processing    PTS video scheduler
-                       |                 ^ audio playhead
-                 preallocated ring ------'
-                       |                 |
-                 cpal / WASAPI     latest display mailbox
-                                         |
-Commands -> runtime      Status -> Iced daemon -> YUV Primitive::draw
-                                                  |
-                               one Iced GPU device and window target
+                      Runtime (outside windows)
+                       |                    |
+               Backends / lifecycle   Platform services
+                       |
+  AirPlay adapter -----+----- Cast / Miracast adapters (future)
+  discovery, auth, transport   discovery, auth, transport
+                       |
+          Sessions (one owner, IDs, cancellation, generation)
+                       |
+               Media decode / demux
+                 |             |
+          audio processing  Live / Timed video scheduler
+                 |             ^ audible audio clock
+         preallocated ring ----'
+                 |             |
+           cpal / WASAPI   latest display mailbox
+                               |
+ Commands -> Runtime    Status -> Iced -> YUV Primitive::draw
+                               |
+                  shared UI/video GPU device and target
 ```
 
 The `Shared` type is a protocol-facing handle, not a desktop object. Settings,
@@ -28,6 +34,16 @@ The `Shared` type is a protocol-facing handle, not a desktop object. Settings,
 separate ownership. Command, status and media channels are separate. Device
 objects are confined to their control/output threads; GPU objects to the
 compositor/renderer. Status messages never contain video planes or PCM.
+
+`receiver::ReceiverBackend` is a control/lifecycle interface, not a per-frame
+queue. The AirPlay adapter owns discovery and listener teardown; stopping it does
+not stop the common runtime or another protocol. Common sessions allocate unique
+IDs and enforce a single playback owner. Same-peer reconnect applies only within
+one protocol, and old media workers/cleanup complete before a replacement owns
+the outputs. Media scheduling uses `Live`/`Timed` policy and explicit clock
+relationships instead of a protocol-specific HLS flag. See
+[Protocol adapter preparation](PROTOCOL_ADAPTERS.md) for extension requirements
+and the protocol references checked before extracting these boundaries.
 
 ## Discovery and receiver identity
 
@@ -64,7 +80,8 @@ contains only the newest frame released by scheduling; future frames remain in
 a bounded scheduling queue. Already-due frames are coalesced to the newest due
 frame; future frames are not presented early. Mirroring releases decoded frames immediately, without waiting for an audio-clock
 horizon that can stall or lag behind live video. Source PTS remains telemetry;
-HLS alone uses timestamp scheduling. The mirrored audio producer uses a slow occupancy
+The current HLS path selects `Timed`; mirror selects `Live`. Future adapters choose
+the policy and normalize their own source clocks explicitly. The mirrored audio producer uses a slow occupancy
 servo limited to 300 ppm, outside the real-time callback. HLS does not adjust
 rate based on how quickly its network source downloads. The clock clamps to
 the last submitted PCM horizon during underflow. Natural HLS EOF drains both
