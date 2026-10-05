@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>AirDock</title>
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="#173f58"/>
+  <path d="M160 192V128h92c76 0 132 56 132 128s-56 128-132 128h-92v-64"
+        fill="none" stroke="#f6fbff" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M104 256h176m-44-44 44 44-44 44"
+        fill="none" stroke="#60d5df" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
