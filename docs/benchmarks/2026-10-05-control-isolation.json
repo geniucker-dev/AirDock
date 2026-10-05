@@ -1,0 +1,1778 @@
+{
+  "schema": 1,
+  "physical_hardware_acceptance": "pending",
+  "verification": {
+    "candidate_commit": "dce6cbadd0c0e21b3d6bad414c3482404febcb94",
+    "release_commit": "216443d2745515ce67fe173db7ee6b96f1beb5cf",
+    "cargo_lock_sha256": "5328c2195d82fc3bb58000977bf0c2af844e7dee0be337ed7d37655527d3a377",
+    "code_change": "Publish the mirror ownership observer as an atomic ID under the original claim/release gate; do not use observers for control authorization.",
+    "reproduction": "Before the fix, a gate-held control caused the mirror ownership observer to miss its one-second read deadline. After the fix it replies before that control finishes.",
+    "library_tests_passed": 83,
+    "updater_tests_passed": 2,
+    "format": "passed",
+    "clippy": "passed",
+    "gui_reconnect": {
+      "reconnect_checks": [
+        "reused control connection, eight-byte ID 0",
+        "reused control connection, eight-byte ID 123456",
+        "reused control connection, eight-byte ID 9223372036854775807",
+        "reused control connection, eight-byte ID 9223372036854775808",
+        "reused control connection, eight-byte ID 18364758544493064720",
+        "reused control connection, eight-byte ID 18446744073709551615",
+        "replacement control connection, positive wide ID 9223372036854776099",
+        "replacement control connection, positive wide ID 18446744073709551615",
+        "first connection on advertised video port",
+        "clean EOF, reconnect to same video port",
+        "TCP reset during header, reconnect to same video port",
+        "TCP reset during payload, reconnect to same video port",
+        "malformed codec configuration, reconnect to same video port"
+      ],
+      "idle_cpu_seconds": {
+        "control connection": 0.07,
+        "control and video connections": 0.04999999999999982
+      },
+      "metrics": {
+        "active_protocol": null,
+        "audio_errors": 0,
+        "audio_output_latency_us": 0,
+        "audio_packets": 0,
+        "audio_recovered": 0,
+        "audio_underruns": 0,
+        "av_measurement": "Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
+        "decoded_frames": 390,
+        "elapsed_seconds": 35.089646633,
+        "estimated_av_offset_us": null,
+        "hdr_uploaded_frames": 0,
+        "hidden_replaced_frames": 0,
+        "hls_audio_samples_per_channel": 0,
+        "idle_inhibition_active": false,
+        "idle_inhibition_supported": false,
+        "last_receive_to_present_us": 833,
+        "latency_sample_count": 390,
+        "latency_sample_window": 4096,
+        "p95_new_submission_interval_us": 34912,
+        "p95_receive_to_present_us": 2644,
+        "p99_new_submission_interval_us": 336389,
+        "p99_receive_to_present_us": 7444,
+        "pending_scheduled_frames": 0,
+        "presentation_measurement": "GPU render submission, not physical display time",
+        "presented_frames": 390,
+        "receiver_view_builds": 78,
+        "render_adapter": "llvmpipe (LLVM 19.1.7, 256 bits) (Vulkan)",
+        "replaced_frames": 0,
+        "schedule_dropped": 0,
+        "stale_dropped": 0,
+        "submission_interval_sample_count": 385,
+        "ten_bit_uploaded_frames": 0,
+        "ui_frame_events": 402,
+        "uploaded_frames": 390,
+        "video_colour_mapping": "No displayed video"
+      },
+      "hardware_parity": "pending"
+    },
+    "gui_hls_fmp4": {
+      "fcup_requests": [
+        "mlhls://fixture/master.m3u8",
+        "mlhls://fixture/master.m3u8",
+        "mlhls://fixture/video.m3u8",
+        "mlhls://fixture/init.mp4",
+        "mlhls://fixture/fragment000.m4s",
+        "mlhls://fixture/fragment001.m4s",
+        "mlhls://fixture/unanswered.m3u8",
+        "mlhls://fixture/unanswered.m3u8"
+      ],
+      "decoded_frames": 30,
+      "audio_samples_per_channel": 46080,
+      "playback_info": {
+        "duration": 1.0,
+        "position": 0.989689,
+        "rate": 0.0,
+        "readyToPlay": false,
+        "playbackBufferEmpty": true,
+        "playbackBufferFull": false,
+        "playbackLikelyToKeepUp": false,
+        "loadedTimeRanges": [
+          {
+            "start": 0.0,
+            "duration": 1.0
+          }
+        ]
+      },
+      "cancellation_seconds": 0.0003437069826759398,
+      "submitted_frames": 30,
+      "hdr": null,
+      "hardware_parity": "pending"
+    },
+    "shutdown": {
+      "SIGINT": {
+        "cleanup_seconds": 0.7668796470097732,
+        "decoded_frames_before_exit": 28
+      },
+      "SIGTERM": {
+        "cleanup_seconds": 0.7656093660043553,
+        "decoded_frames_before_exit": 28
+      }
+    },
+    "dependency_audit": {
+      "dependencies": 539,
+      "retired_dependencies": [],
+      "native_features": [
+        "avcodec",
+        "avformat",
+        "swresample",
+        "nvcodec"
+      ],
+      "project_license": "MPL-2.0; third-party exceptions in LICENSES.md"
+    },
+    "prior_ci": {
+      "commit": "24cb1900fc4a0cebcba20e25fd1cb4588218ca55",
+      "url": "https://github.com/geniucker-dev/AirDock/actions/runs/37329532670",
+      "linux": "passed",
+      "windows": "passed"
+    },
+    "physical_hardware_acceptance": "pending"
+  },
+  "comparison": {
+    "schema": 1,
+    "release_commit": "216443d2745515ce67fe173db7ee6b96f1beb5cf",
+    "current_commit": "dce6cbadd0c0e21b3d6bad414c3482404febcb94",
+    "physical_hardware": false,
+    "measurement": "Linux/X11 Vulkan submissions, software decoding, null audio",
+    "limitations": [
+      "Not official Windows binaries",
+      "No physical display events or display latency",
+      "No WASAPI device, audible AV offset or drift",
+      "No hardware GPU utilization or VRAM",
+      "Hidden X11 window is not Windows tray acceptance"
+    ],
+    "cpu_definition": "100 percent equals one fully occupied core; sender excluded",
+    "memory_definition": "Linux smaps_rollup Private_Clean + Private_Dirty + Private_Hugetlb",
+    "configuration": {
+      "release": "/workspace/scratch/airdock-performance-binaries/release-v0.1.2",
+      "current": "/workspace/scratch/airdock-performance-target/release/airdock",
+      "release_commit": "216443d2745515ce67fe173db7ee6b96f1beb5cf",
+      "current_commit": "dce6cbadd0c0e21b3d6bad414c3482404febcb94",
+      "output": "/workspace/scratch/airdock-control-isolation-performance",
+      "runs": 3,
+      "seconds": 15,
+      "idle_seconds": 15,
+      "warmup": 3,
+      "port": 7020,
+      "cases": [
+        "h264",
+        "hevc"
+      ]
+    },
+    "environment": {
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "processor": "",
+      "cpu_quota": "400000 100000",
+      "memory_limit": "17179869184",
+      "xdg_data_dirs": "/workspace/scratch/airdock-protocol-host/sysroot/usr/share:/usr/local/share:/usr/share",
+      "wgpu_backend": "vulkan",
+      "vulkan_driver": "/workspace/scratch/airdock-protocol-host/sysroot/usr/share/vulkan/icd.d/lvp_icd.json",
+      "llvmpipe_threads": "2",
+      "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers\nbuilt with gcc 14 (Debian 14.2.0-19)\nconfiguration: --prefix=/usr --extra-version=0+deb13u1 --toolchain=hardened --libdir=/usr/lib/x86_64-linux-gnu --incdir=/usr/include/x86_64-linux-gnu --arch=amd64 --enable-gpl --disable-stripping --disable-libmfx --disable-omx --enable-gnutls --enable-libaom --enable-libass --enable-libbs2b --enable-libcdio --enable-libcodec2 --enable-libdav1d --enable-libflite --enable-libfontconfig --enable-libfreetype --enable-libfribidi --enable-libglslang --enable-libgme --enable-libgsm --enable-libharfbuzz --enable-libmp3lame --enable-libmysofa --enable-libopenjpeg --enable-libopenmpt --enable-libopus --enable-librubberband --enable-libshine --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libtheora --enable-libtwolame --enable-libvidstab --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx265 --enable-libxml2 --enable-libxvid --enable-libzimg --enable-openal --enable-opencl --enable-opengl --disable-sndio --enable-libvpl --enable-libdc1394 --enable-libdrm --enable-libiec61883 --enable-chromaprint --enable-frei0r --enable-ladspa --enable-libbluray --enable-libcaca --enable-libdvdnav --enable-libdvdread --enable-libjack --enable-libpulse --enable-librabbitmq --enable-librist --enable-libsrt --enable-libssh --enable-libsvtav1 --enable-libx264 --enable-libzmq --enable-libzvbi --enable-lv2 --enable-sdl2 --enable-libplacebo --enable-librav1e --enable-pocketsphinx --enable-librsvg --enable-libjxl --enable-shared\nlibavutil      59. 39.100 / 59. 39.100\nlibavcodec     61. 19.101 / 61. 19.101\nlibavformat    61.  7.103 / 61.  7.103\nlibavdevice    61.  3.100 / 61.  3.100\nlibavfilter    10.  5.100 / 10.  5.100\nlibswscale      8.  3.100 /  8.  3.100\nlibswresample   5.  3.100 /  5.  3.100\nlibpostproc    58.  3.100 / 58.  3.100\n"
+    },
+    "binary_sha256": {
+      "release": "ec41f480556f03a2b0b74af2c2aa9cadc6060f2b2d21bc8f0c914cb9857254c1",
+      "current": "bea77fdc577706814fecdbfa22a674e041a88dc5b3678c9d3702afa97040b9ab"
+    },
+    "input_sha256": {
+      "hevc.mp4": "6e7f59ff426f91e976222b7c7b4bcb22a4d42cb6d84ba61397e651ee1877da64",
+      "h264.mp4": "74375ad221596ca8fe1ee94e0d0fe1a6dcfedd8b3c1fefd56862219bbb9ba644",
+      "hls/segment020.m4s": "d2d6fcd5dff67248721d4e2289a575d6bb3f452cf4b5cdad3eb5ed672d143125",
+      "hls/segment005.m4s": "104e8ffd20744140dc6d9f15a4031d6b4a8fd1ac60142a7435e56a0bf8011b0e",
+      "hls/segment016.m4s": "359d207c54ec002cd799823644168378680f0bcb2438f9e08a3a551ddd7703aa",
+      "hls/segment006.m4s": "50c30c0bd1049e548521322b7ef43271857bb888ba3c06f18d448b965909664a",
+      "hls/segment021.m4s": "8edb05e51fda112d27ae63d75e517c35874e3197a997866bdf68bf51f4d27f88",
+      "hls/segment019.m4s": "651edc2340ef8354eb1fb8bfa3575df6c04dfcc4a7144fa0411c682e22c1a55b",
+      "hls/segment015.m4s": "35aa4b8151f15fdd6f7b6542609bd23e82d0bc59c564b311f3db35050d078721",
+      "hls/segment018.m4s": "e2be7f3625737376827ccbc8a553d09d0147d4dff862c02c638b6c226fc31bc2",
+      "hls/segment012.m4s": "42bf8b595d6eb58e4c9cf0c744d784280eb1cf1c6d9c1457967574ee8303b3c4",
+      "hls/init.mp4": "1adc8202e51e9816fbaa2977cc5669128aacf8948ca82581756e84cd8ad7ef5e",
+      "hls/segment004.m4s": "fea789307d5d1340868b59fc4cdeb3404ee46e297136b73446e5f728c2b719b4",
+      "hls/segment017.m4s": "5e2b1cb1a26f9fed79336bb3352e5a3ad50e4ed325d835cf2ddc6c37635143cb",
+      "hls/segment011.m4s": "ac9fdad6e9bbc05aafaf43080371c35f8aae9b612a3faebc38195bb4cf533f7e",
+      "hls/segment014.m4s": "d132d6749992f996ca458ab47043940b338618437a05c82922c7d5ba64b6aee5",
+      "hls/segment008.m4s": "ecd9e06445eb9a606ddf51d0c0cd649bf818efb19036f6340bc1b9bcb1b137f0",
+      "hls/segment010.m4s": "78a4f40ebb91e2054f175ddd922c375cc8104e7501ef28aeb59303869107ea01",
+      "hls/video.m3u8": "2c8b89d87169d98fc8b7e400b8dd6256a520bc47a9718ac677df1f0b602f1cac",
+      "hls/segment003.m4s": "c8f7eea9e0c6e592f69e5865c5fd5faa7a29195cdb8203c2b9df359683aa578d",
+      "hls/segment007.m4s": "7a54e32e7ae27133107754419fe9232aa00841613afe5a5984eb38dc7326bab1",
+      "hls/segment009.m4s": "05257f9c92e3b5fc338393e4390895c592025601a084a149c18d161585db4fee",
+      "hls/segment001.m4s": "71a426e81c7700ff4d4b2408aa2dff004596976d6fc6b6902152600101ee5c31",
+      "hls/segment013.m4s": "ee96116553a05990a045ec144741d6911acb9339a6b5d3da16fdc9be5757addd",
+      "hls/segment000.m4s": "970939967bdd51dd09a33250fe78da31cbe81ab08d91eb488b11cacfda3c9a19",
+      "hls/segment002.m4s": "4884d3142a81065ed890b56be4b5fc0899733d2516c6a6d1c0294234892120c2"
+    },
+    "runs": [
+      {
+        "version": "release",
+        "case": "h264",
+        "run": 0,
+        "sent_video_frames": 1080,
+        "metrics": {
+          "audio_errors": 0,
+          "audio_output_latency_us": 0,
+          "audio_packets": 1801,
+          "audio_recovered": 0,
+          "audio_underruns": 0,
+          "av_measurement": "Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
+          "decoded_frames": 1080,
+          "elapsed_seconds": 22.153658252,
+          "estimated_av_offset_us": null,
+          "hdr_uploaded_frames": 0,
+          "hidden_replaced_frames": 0,
+          "hls_audio_samples_per_channel": 0,
+          "idle_inhibition_active": false,
+          "idle_inhibition_supported": false,
+          "last_receive_to_present_us": 7992,
+          "latency_sample_count": 1078,
+          "latency_sample_window": 4096,
+          "p95_new_submission_interval_us": 17344,
+          "p95_receive_to_present_us": 4335,
+          "p99_new_submission_interval_us": 25276,
+          "p99_receive_to_present_us": 11535,
+          "pending_scheduled_frames": 0,
+          "presentation_measurement": "GPU render submission, not physical display time",
+          "presented_frames": 1078,
+          "receiver_view_builds": 31,
+          "render_adapter": "llvmpipe (LLVM 19.1.7, 256 bits) (Vulkan)",
+          "replaced_frames": 3,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "submission_interval_sample_count": 1077,
+          "ten_bit_uploaded_frames": 0,
+          "ui_frame_events": 1081,
+          "uploaded_frames": 1078,
+          "video_colour_mapping": "No displayed video"
+        },
+        "measured_seconds": 15.000575096026296,
+        "receiver_cpu_percent_one_core": 144.99444095154493,
+        "private_resident_mib_median": 116.609375,
+        "private_resident_mib_peak": 116.625,
+        "resource_samples": [
+          {
+            "seconds": 0.0032056060153990984,
+            "cpu_seconds": 0.0,
+            "private_resident_mib": 116.41015625
+          },
+          {
+            "seconds": 1.0065592270111665,
+            "cpu_seconds": 1.5299999999999994,
+            "private_resident_mib": 116.57421875
+          },
+          {
+            "seconds": 2.00929426701623,
+            "cpu_seconds": 2.9299999999999997,
+            "private_resident_mib": 116.57421875
+          },
+          {
+            "seconds": 3.0126624050026294,
+            "cpu_seconds": 4.33,
+            "private_resident_mib": 116.5859375
+          },
+          {
+            "seconds": 4.015351120004198,
+            "cpu_seconds": 5.699999999999999,
+            "private_resident_mib": 116.5859375
+          },
+          {
+            "seconds": 5.018149207025999,
+            "cpu_seconds": 7.09,
+            "private_resident_mib": 116.5859375
+          },
+          {
+            "seconds": 6.020651963015553,
+            "cpu_seconds": 8.61,
+            "private_resident_mib": 116.6015625
+          },
+          {
+            "seconds": 7.023175034002634,
+            "cpu_seconds": 9.969999999999999,
+            "private_resident_mib": 116.609375
+          },
+          {
+            "seconds": 8.02582493700902,
+            "cpu_seconds": 11.350000000000001,
+            "private_resident_mib": 116.61328125
+          },
+          {
+            "seconds": 9.029422160005197,
+            "cpu_seconds": 12.870000000000001,
+            "private_resident_mib": 116.6171875
+          },
+          {
+            "seconds": 10.032092983019538,
+            "cpu_seconds": 14.23,
+            "private_resident_mib": 116.62109375
+          },
+          {
+            "seconds": 11.034512559010182,
+            "cpu_seconds": 15.629999999999999,
+            "private_resident_mib": 116.62109375
+          },
+          {
+            "seconds": 12.037028681021184,
+            "cpu_seconds": 17.22,
+            "private_resident_mib": 116.62109375
+          },
+          {
+            "seconds": 13.039553763024742,
+            "cpu_seconds": 18.69,
+            "private_resident_mib": 116.62109375
+          },
+          {
+            "seconds": 14.04197914301767,
+            "cpu_seconds": 20.15,
+            "private_resident_mib": 116.625
+          }
+        ],
+        "sender_lateness_p99_ms": 0.33561766031198204
+      },
+      {
+        "version": "current",
+        "case": "h264",
+        "run": 0,
+        "sent_video_frames": 1080,
+        "metrics": {
+          "active_protocol": null,
+          "audio_errors": 0,
+          "audio_output_latency_us": 0,
+          "audio_packets": 1801,
+          "audio_recovered": 0,
+          "audio_underruns": 0,
+          "av_measurement": "Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
+          "decoded_frames": 1080,
+          "elapsed_seconds": 22.158913617,
+          "estimated_av_offset_us": null,
+          "hdr_uploaded_frames": 0,
+          "hidden_replaced_frames": 0,
+          "hls_audio_samples_per_channel": 0,
+          "idle_inhibition_active": false,
+          "idle_inhibition_supported": false,
+          "last_receive_to_present_us": 4266,
+          "latency_sample_count": 1079,
+          "latency_sample_window": 4096,
+          "p95_new_submission_interval_us": 18353,
+          "p95_receive_to_present_us": 5798,
+          "p99_new_submission_interval_us": 24823,
+          "p99_receive_to_present_us": 12013,
+          "pending_scheduled_frames": 0,
+          "presentation_measurement": "GPU render submission, not physical display time",
+          "presented_frames": 1079,
+          "receiver_view_builds": 30,
+          "render_adapter": "llvmpipe (LLVM 19.1.7, 256 bits) (Vulkan)",
+          "replaced_frames": 1,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "submission_interval_sample_count": 1078,
+          "ten_bit_uploaded_frames": 0,
+          "ui_frame_events": 1081,
+          "uploaded_frames": 1079,
+          "video_colour_mapping": "No displayed video"
+        },
+        "measured_seconds": 15.000659034005366,
+        "receiver_cpu_percent_one_core": 147.19353296376045,
+        "private_resident_mib_median": 116.03515625,
+        "private_resident_mib_peak": 116.06640625,
+        "resource_samples": [
+          {
+            "seconds": 0.0033065930183511227,
+            "cpu_seconds": 0.0,
+            "private_resident_mib": 115.8359375
+          },
+          {
+            "seconds": 1.006338246021187,
+            "cpu_seconds": 1.3200000000000003,
+            "private_resident_mib": 116.0078125
+          },
+          {
+            "seconds": 2.0089462870091666,
+            "cpu_seconds": 2.83,
+            "private_resident_mib": 116.01171875
+          },
+          {
+            "seconds": 3.0117066230159253,
+            "cpu_seconds": 4.28,
+            "private_resident_mib": 116.01171875
+          },
+          {
+            "seconds": 4.014384323003469,
+            "cpu_seconds": 5.72,
+            "private_resident_mib": 116.01171875
+          },
+          {
+            "seconds": 5.016946606017882,
+            "cpu_seconds": 7.2299999999999995,
+            "private_resident_mib": 116.015625
+          },
+          {
+            "seconds": 6.019614849006757,
+            "cpu_seconds": 8.629999999999999,
+            "private_resident_mib": 116.03125
+          },
+          {
+            "seconds": 7.0232607620127965,
+            "cpu_seconds": 10.030000000000001,
+            "private_resident_mib": 116.03515625
+          },
+          {
+            "seconds": 8.026067908009281,
+            "cpu_seconds": 11.510000000000002,
+            "private_resident_mib": 116.03515625
+          },
+          {
+            "seconds": 9.028690978011582,
+            "cpu_seconds": 12.96,
+            "private_resident_mib": 116.0546875
+          },
+          {
+            "seconds": 10.031817876006244,
+            "cpu_seconds": 14.470000000000002,
+            "private_resident_mib": 116.0546875
+          },
+          {
+            "seconds": 11.034753245010506,
+            "cpu_seconds": 15.880000000000003,
+            "private_resident_mib": 116.05859375
+          },
+          {
+            "seconds": 12.037396711006295,
+            "cpu_seconds": 17.400000000000002,
+            "private_resident_mib": 116.06640625
+          },
+          {
+            "seconds": 13.041615200025262,
+            "cpu_seconds": 18.94,
+            "private_resident_mib": 116.06640625
+          },
+          {
+            "seconds": 14.044393508025678,
+            "cpu_seconds": 20.580000000000002,
+            "private_resident_mib": 116.06640625
+          }
+        ],
+        "sender_lateness_p99_ms": 1.9327149784658104
+      },
+      {
+        "version": "release",
+        "case": "hevc",
+        "run": 0,
+        "sent_video_frames": 1080,
+        "metrics": {
+          "audio_errors": 0,
+          "audio_output_latency_us": 0,
+          "audio_packets": 1801,
+          "audio_recovered": 0,
+          "audio_underruns": 0,
+          "av_measurement": "Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
+          "decoded_frames": 1080,
+          "elapsed_seconds": 22.338689978,
+          "estimated_av_offset_us": null,
+          "hdr_uploaded_frames": 0,
+          "hidden_replaced_frames": 0,
+          "hls_audio_samples_per_channel": 0,
+          "idle_inhibition_active": false,
+          "idle_inhibition_supported": false,
+          "last_receive_to_present_us": 3118,
+          "latency_sample_count": 1072,
+          "latency_sample_window": 4096,
+          "p95_new_submission_interval_us": 19272,
+          "p95_receive_to_present_us": 10357,
+          "p99_new_submission_interval_us": 27194,
+          "p99_receive_to_present_us": 19514,
+          "pending_scheduled_frames": 0,
+          "presentation_measurement": "GPU render submission, not physical display time",
+          "presented_frames": 1072,
+          "receiver_view_builds": 30,
+          "render_adapter": "llvmpipe (LLVM 19.1.7, 256 bits) (Vulkan)",
+          "replaced_frames": 8,
+          "schedule_dropped": 1,
+          "stale_dropped": 0,
+          "submission_interval_sample_count": 1071,
+          "ten_bit_uploaded_frames": 0,
+          "ui_frame_events": 1080,
+          "uploaded_frames": 1072,
+          "video_colour_mapping": "No displayed video"
+        },
+        "measured_seconds": 15.000484242977109,
+        "receiver_cpu_percent_one_core": 170.19450563372692,
+        "private_resident_mib_median": 121.64453125,
+        "private_resident_mib_peak": 124.66015625,
+        "resource_samples": [
+          {
+            "seconds": 0.002635983983054757,
+            "cpu_seconds": 0.0,
+            "private_resident_mib": 121.62109375
+          },
+          {
+            "seconds": 1.005272160982713,
+            "cpu_seconds": 1.62,
+            "private_resident_mib": 121.62890625
+          },
+          {
+            "seconds": 2.007804976979969,
+            "cpu_seconds": 3.3199999999999994,
+            "private_resident_mib": 121.6328125
+          },
+          {
+            "seconds": 3.0141962849884294,
+            "cpu_seconds": 4.97,
+            "private_resident_mib": 121.6328125
+          },
+          {
+            "seconds": 4.0166973779851105,
+            "cpu_seconds": 6.64,
+            "private_resident_mib": 121.6328125
+          },
+          {
+            "seconds": 5.019098841003142,
+            "cpu_seconds": 8.379999999999999,
+            "private_resident_mib": 121.6328125
+          },
+          {
+            "seconds": 6.022095122985775,
+            "cpu_seconds": 10.07,
+            "private_resident_mib": 121.64453125
+          },
+          {
+            "seconds": 7.026325850980356,
+            "cpu_seconds": 11.739999999999998,
+            "private_resident_mib": 121.64453125
+          },
+          {
+            "seconds": 8.02875472800224,
+            "cpu_seconds": 13.379999999999999,
+            "private_resident_mib": 121.64453125
+          },
+          {
+            "seconds": 9.033886744990014,
+            "cpu_seconds": 15.029999999999998,
+            "private_resident_mib": 121.65234375
+          },
+          {
+            "seconds": 10.037298649986042,
+            "cpu_seconds": 16.7,
+            "private_resident_mib": 121.65234375
+          },
+          {
+            "seconds": 11.04042138697696,
+            "cpu_seconds": 18.49,
+            "private_resident_mib": 121.65234375
+          },
+          {
+            "seconds": 12.04320093599381,
+            "cpu_seconds": 20.25,
+            "private_resident_mib": 121.66015625
+          },
+          {
+            "seconds": 13.04643383299117,
+            "cpu_seconds": 22.12,
+            "private_resident_mib": 121.6640625
+          },
+          {
+            "seconds": 14.049090073996922,
+            "cpu_seconds": 23.91,
+            "private_resident_mib": 124.66015625
+          }
+        ],
+        "sender_lateness_p99_ms": 1.4028496807441115
+      },
+      {
+        "version": "current",
+        "case": "hevc",
+        "run": 0,
+        "sent_video_frames": 1080,
+        "metrics": {
+          "active_protocol": null,
+          "audio_errors": 0,
+          "audio_output_latency_us": 0,
+          "audio_packets": 1801,
+          "audio_recovered": 0,
+          "audio_underruns": 0,
+          "av_measurement": "Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
+          "decoded_frames": 1080,
+          "elapsed_seconds": 22.244997258,
+          "estimated_av_offset_us": null,
+          "hdr_uploaded_frames": 0,
+          "hidden_replaced_frames": 0,
+          "hls_audio_samples_per_channel": 0,
+          "idle_inhibition_active": false,
+          "idle_inhibition_supported": false,
+          "last_receive_to_present_us": 5190,
+          "latency_sample_count": 1075,
+          "latency_sample_window": 4096,
+          "p95_new_submission_interval_us": 19447,
+          "p95_receive_to_present_us": 10170,
+          "p99_new_submission_interval_us": 28426,
+          "p99_receive_to_present_us": 16193,
+          "pending_scheduled_frames": 0,
+          "presentation_measurement": "GPU render submission, not physical display time",
+          "presented_frames": 1075,
+          "receiver_view_builds": 31,
+          "render_adapter": "llvmpipe (LLVM 19.1.7, 256 bits) (Vulkan)",
+          "replaced_frames": 5,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "submission_interval_sample_count": 1074,
+          "ten_bit_uploaded_frames": 0,
+          "ui_frame_events": 1081,
+          "uploaded_frames": 1075,
+          "video_colour_mapping": "No displayed video"
+        },
+        "measured_seconds": 15.0005488890165,
+        "receiver_cpu_percent_one_core": 169.3271372129459,
+        "private_resident_mib_median": 121.5078125,
+        "private_resident_mib_peak": 121.5234375,
+        "resource_samples": [
+          {
+            "seconds": 0.0037696330109611154,
+            "cpu_seconds": 0.009999999999999787,
+            "private_resident_mib": 121.4765625
+          },
+          {
+            "seconds": 1.007541617989773,
+            "cpu_seconds": 1.75,
+            "private_resident_mib": 121.4765625
+          },
+          {
+            "seconds": 2.0105240140110254,
+            "cpu_seconds": 3.4699999999999998,
+            "private_resident_mib": 121.48046875
+          },
+          {
+            "seconds": 3.0144385730091017,
+            "cpu_seconds": 5.1000000000000005,
+            "private_resident_mib": 121.48046875
+          },
+          {
+            "seconds": 4.017067203007173,
+            "cpu_seconds": 6.760000000000001,
+            "private_resident_mib": 121.4921875
+          },
+          {
+            "seconds": 5.027077728998847,
+            "cpu_seconds": 8.41,
+            "private_resident_mib": 121.4921875
+          },
+          {
+            "seconds": 6.032202406990109,
+            "cpu_seconds": 10.120000000000001,
+            "private_resident_mib": 121.5078125
+          },
+          {
+            "seconds": 7.035238393989857,
+            "cpu_seconds": 11.73,
+            "private_resident_mib": 121.5078125
+          },
+          {
+            "seconds": 8.038204987009522,
+            "cpu_seconds": 13.310000000000002,
+            "private_resident_mib": 121.5078125
+          },
+          {
+            "seconds": 9.041131100006169,
+            "cpu_seconds": 14.93,
+            "private_resident_mib": 121.51171875
+          },
+          {
+            "seconds": 10.043763782014139,
+            "cpu_seconds": 16.62,
+            "private_resident_mib": 121.51171875
+          },
+          {
+            "seconds": 11.047623138001654,
+            "cpu_seconds": 18.35,
+            "private_resident_mib": 121.515625
+          },
+          {
+            "seconds": 12.05063919100212,
+            "cpu_seconds": 20.04,
+            "private_resident_mib": 121.5234375
+          },
+          {
+            "seconds": 13.054362463008147,
+            "cpu_seconds": 21.880000000000003,
+            "private_resident_mib": 121.5234375
+          },
+          {
+            "seconds": 14.057484735007165,
+            "cpu_seconds": 23.66,
+            "private_resident_mib": 121.5234375
+          }
+        ],
+        "sender_lateness_p99_ms": 1.0443466890137643
+      },
+      {
+        "version": "current",
+        "case": "h264",
+        "run": 1,
+        "sent_video_frames": 1080,
+        "metrics": {
+          "active_protocol": null,
+          "audio_errors": 0,
+          "audio_output_latency_us": 0,
+          "audio_packets": 1801,
+          "audio_recovered": 0,
+          "audio_underruns": 0,
+          "av_measurement": "Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
+          "decoded_frames": 1080,
+          "elapsed_seconds": 22.336096665,
+          "estimated_av_offset_us": null,
+          "hdr_uploaded_frames": 0,
+          "hidden_replaced_frames": 0,
+          "hls_audio_samples_per_channel": 0,
+          "idle_inhibition_active": false,
+          "idle_inhibition_supported": false,
+          "last_receive_to_present_us": 2239,
+          "latency_sample_count": 1079,
+          "latency_sample_window": 4096,
+          "p95_new_submission_interval_us": 18234,
+          "p95_receive_to_present_us": 7019,
+          "p99_new_submission_interval_us": 27177,
+          "p99_receive_to_present_us": 13125,
+          "pending_scheduled_frames": 0,
+          "presentation_measurement": "GPU render submission, not physical display time",
+          "presented_frames": 1079,
+          "receiver_view_builds": 31,
+          "render_adapter": "llvmpipe (LLVM 19.1.7, 256 bits) (Vulkan)",
+          "replaced_frames": 1,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "submission_interval_sample_count": 1078,
+          "ten_bit_uploaded_frames": 0,
+          "ui_frame_events": 1081,
+          "uploaded_frames": 1079,
+          "video_colour_mapping": "No displayed video"
+        },
+        "measured_seconds": 15.000569705996895,
+        "receiver_cpu_percent_one_core": 144.26118756908818,
+        "private_resident_mib_median": 116.359375,
+        "private_resident_mib_peak": 116.3828125,
+        "resource_samples": [
+          {
+            "seconds": 0.0030121489835437387,
+            "cpu_seconds": 0.009999999999999787,
+            "private_resident_mib": 116.15234375
+          },
+          {
+            "seconds": 1.006503286975203,
+            "cpu_seconds": 1.5,
+            "private_resident_mib": 116.31640625
+          },
+          {
+            "seconds": 2.009114155982388,
+            "cpu_seconds": 2.8999999999999995,
+            "private_resident_mib": 116.32421875
+          },
+          {
+            "seconds": 3.012468799977796,
+            "cpu_seconds": 4.339999999999999,
+            "private_resident_mib": 116.3359375
+          },
+          {
+            "seconds": 4.015362874983111,
+            "cpu_seconds": 5.69,
+            "private_resident_mib": 116.34375
+          },
+          {
+            "seconds": 5.018385834002402,
+            "cpu_seconds": 7.12,
+            "private_resident_mib": 116.34375
+          },
+          {
+            "seconds": 6.021348643000238,
+            "cpu_seconds": 8.64,
+            "private_resident_mib": 116.35546875
+          },
+          {
+            "seconds": 7.026110506994883,
+            "cpu_seconds": 10.190000000000001,
+            "private_resident_mib": 116.359375
+          },
+          {
+            "seconds": 8.028909038985148,
+            "cpu_seconds": 11.869999999999997,
+            "private_resident_mib": 116.359375
+          },
+          {
+            "seconds": 9.03194740699837,
+            "cpu_seconds": 13.48,
+            "private_resident_mib": 116.37109375
+          },
+          {
+            "seconds": 10.03505049998057,
+            "cpu_seconds": 14.939999999999998,
+            "private_resident_mib": 116.37109375
+          },
+          {
+            "seconds": 11.038137701980304,
+            "cpu_seconds": 16.279999999999998,
+            "private_resident_mib": 116.37890625
+          },
+          {
+            "seconds": 12.04201996899792,
+            "cpu_seconds": 17.66,
+            "private_resident_mib": 116.37890625
+          },
+          {
+            "seconds": 13.045144891977543,
+            "cpu_seconds": 19.02,
+            "private_resident_mib": 116.37890625
+          },
+          {
+            "seconds": 14.04814572999021,
+            "cpu_seconds": 20.34,
+            "private_resident_mib": 116.3828125
+          }
+        ],
+        "sender_lateness_p99_ms": 0.6624576926697046
+      },
+      {
+        "version": "release",
+        "case": "h264",
+        "run": 1,
+        "sent_video_frames": 1080,
+        "metrics": {
+          "audio_errors": 0,
+          "audio_output_latency_us": 0,
+          "audio_packets": 1801,
+          "audio_recovered": 0,
+          "audio_underruns": 0,
+          "av_measurement": "Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
+          "decoded_frames": 1080,
+          "elapsed_seconds": 22.341117936,
+          "estimated_av_offset_us": null,
+          "hdr_uploaded_frames": 0,
+          "hidden_replaced_frames": 0,
+          "hls_audio_samples_per_channel": 0,
+          "idle_inhibition_active": false,
+          "idle_inhibition_supported": false,
+          "last_receive_to_present_us": 2429,
+          "latency_sample_count": 1079,
+          "latency_sample_window": 4096,
+          "p95_new_submission_interval_us": 18098,
+          "p95_receive_to_present_us": 4843,
+          "p99_new_submission_interval_us": 23745,
+          "p99_receive_to_present_us": 10615,
+          "pending_scheduled_frames": 0,
+          "presentation_measurement": "GPU render submission, not physical display time",
+          "presented_frames": 1079,
+          "receiver_view_builds": 31,
+          "render_adapter": "llvmpipe (LLVM 19.1.7, 256 bits) (Vulkan)",
+          "replaced_frames": 2,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "submission_interval_sample_count": 1078,
+          "ten_bit_uploaded_frames": 0,
+          "ui_frame_events": 1081,
+          "uploaded_frames": 1079,
+          "video_colour_mapping": "No displayed video"
+        },
+        "measured_seconds": 15.000483067007735,
+        "receiver_cpu_percent_one_core": 142.19542067224148,
+        "private_resident_mib_median": 116.76953125,
+        "private_resident_mib_peak": 116.78515625,
+        "resource_samples": [
+          {
+            "seconds": 0.002951051981654018,
+            "cpu_seconds": 0.0,
+            "private_resident_mib": 116.578125
+          },
+          {
+            "seconds": 1.0062180380045902,
+            "cpu_seconds": 1.4100000000000001,
+            "private_resident_mib": 116.75
+          },
+          {
+            "seconds": 2.0094354249886237,
+            "cpu_seconds": 2.8200000000000003,
+            "private_resident_mib": 116.7578125
+          },
+          {
+            "seconds": 3.013239029009128,
+            "cpu_seconds": 4.2299999999999995,
+            "private_resident_mib": 116.7578125
+          },
+          {
+            "seconds": 4.015724958007922,
+            "cpu_seconds": 5.62,
+            "private_resident_mib": 116.7578125
+          },
+          {
+            "seconds": 5.018603308009915,
+            "cpu_seconds": 7.090000000000001,
+            "private_resident_mib": 116.7578125
+          },
+          {
+            "seconds": 6.022331279003993,
+            "cpu_seconds": 8.580000000000002,
+            "private_resident_mib": 116.76953125
+          },
+          {
+            "seconds": 7.025019152002642,
+            "cpu_seconds": 10.010000000000002,
+            "private_resident_mib": 116.76953125
+          },
+          {
+            "seconds": 8.027733663999243,
+            "cpu_seconds": 11.440000000000001,
+            "private_resident_mib": 116.76953125
+          },
+          {
+            "seconds": 9.030959039984737,
+            "cpu_seconds": 12.870000000000001,
+            "private_resident_mib": 116.78125
+          },
+          {
+            "seconds": 10.033456454984844,
+            "cpu_seconds": 14.370000000000001,
+            "private_resident_mib": 116.78125
+          },
+          {
+            "seconds": 11.037506480992306,
+            "cpu_seconds": 15.870000000000001,
+            "private_resident_mib": 116.78125
+          },
+          {
+            "seconds": 12.040033644996583,
+            "cpu_seconds": 17.37,
+            "private_resident_mib": 116.78125
+          },
+          {
+            "seconds": 13.042450256005395,
+            "cpu_seconds": 18.76,
+            "private_resident_mib": 116.78515625
+          },
+          {
+            "seconds": 14.04486685298616,
+            "cpu_seconds": 20.060000000000002,
+            "private_resident_mib": 116.78515625
+          }
+        ],
+        "sender_lateness_p99_ms": 1.1768446711357683
+      },
+      {
+        "version": "current",
+        "case": "hevc",
+        "run": 1,
+        "sent_video_frames": 1080,
+        "metrics": {
+          "active_protocol": null,
+          "audio_errors": 0,
+          "audio_output_latency_us": 0,
+          "audio_packets": 1801,
+          "audio_recovered": 0,
+          "audio_underruns": 0,
+          "av_measurement": "Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
+          "decoded_frames": 1080,
+          "elapsed_seconds": 22.248136772,
+          "estimated_av_offset_us": null,
+          "hdr_uploaded_frames": 0,
+          "hidden_replaced_frames": 0,
+          "hls_audio_samples_per_channel": 0,
+          "idle_inhibition_active": false,
+          "idle_inhibition_supported": false,
+          "last_receive_to_present_us": 3393,
+          "latency_sample_count": 1073,
+          "latency_sample_window": 4096,
+          "p95_new_submission_interval_us": 20245,
+          "p95_receive_to_present_us": 11622,
+          "p99_new_submission_interval_us": 27869,
+          "p99_receive_to_present_us": 19366,
+          "pending_scheduled_frames": 0,
+          "presentation_measurement": "GPU render submission, not physical display time",
+          "presented_frames": 1073,
+          "receiver_view_builds": 31,
+          "render_adapter": "llvmpipe (LLVM 19.1.7, 256 bits) (Vulkan)",
+          "replaced_frames": 8,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "submission_interval_sample_count": 1072,
+          "ten_bit_uploaded_frames": 0,
+          "ui_frame_events": 1081,
+          "uploaded_frames": 1073,
+          "video_colour_mapping": "No displayed video"
+        },
+        "measured_seconds": 15.000746639008867,
+        "receiver_cpu_percent_one_core": 173.3247059342233,
+        "private_resident_mib_median": 121.43359375,
+        "private_resident_mib_peak": 121.44921875,
+        "resource_samples": [
+          {
+            "seconds": 0.004466140002477914,
+            "cpu_seconds": 0.009999999999999787,
+            "private_resident_mib": 121.38671875
+          },
+          {
+            "seconds": 1.0076162909972481,
+            "cpu_seconds": 1.79,
+            "private_resident_mib": 121.40234375
+          },
+          {
+            "seconds": 2.0105410320102237,
+            "cpu_seconds": 3.54,
+            "private_resident_mib": 121.4140625
+          },
+          {
+            "seconds": 3.013368842017371,
+            "cpu_seconds": 5.39,
+            "private_resident_mib": 121.41796875
+          },
+          {
+            "seconds": 4.017407097999239,
+            "cpu_seconds": 7.38,
+            "private_resident_mib": 121.41796875
+          },
+          {
+            "seconds": 5.021457824012032,
+            "cpu_seconds": 9.170000000000002,
+            "private_resident_mib": 121.41796875
+          },
+          {
+            "seconds": 6.0243976910132915,
+            "cpu_seconds": 10.89,
+            "private_resident_mib": 121.43359375
+          },
+          {
+            "seconds": 7.0271141580014955,
+            "cpu_seconds": 12.59,
+            "private_resident_mib": 121.43359375
+          },
+          {
+            "seconds": 8.02977341299993,
+            "cpu_seconds": 14.34,
+            "private_resident_mib": 121.4375
+          },
+          {
+            "seconds": 9.032485678995727,
+            "cpu_seconds": 16.009999999999998,
+            "private_resident_mib": 121.44140625
+          },
+          {
+            "seconds": 10.03593996001291,
+            "cpu_seconds": 17.71,
+            "private_resident_mib": 121.4453125
+          },
+          {
+            "seconds": 11.039155306003522,
+            "cpu_seconds": 19.369999999999997,
+            "private_resident_mib": 121.4453125
+          },
+          {
+            "seconds": 12.043180957000004,
+            "cpu_seconds": 21.009999999999998,
+            "private_resident_mib": 121.44921875
+          },
+          {
+            "seconds": 13.04731042101048,
+            "cpu_seconds": 22.74,
+            "private_resident_mib": 121.44921875
+          },
+          {
+            "seconds": 14.050175481999759,
+            "cpu_seconds": 24.45,
+            "private_resident_mib": 121.44921875
+          }
+        ],
+        "sender_lateness_p99_ms": 1.0184186685364693
+      },
+      {
+        "version": "release",
+        "case": "hevc",
+        "run": 1,
+        "sent_video_frames": 1080,
+        "metrics": {
+          "audio_errors": 0,
+          "audio_output_latency_us": 0,
+          "audio_packets": 1801,
+          "audio_recovered": 0,
+          "audio_underruns": 0,
+          "av_measurement": "Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
+          "decoded_frames": 1080,
+          "elapsed_seconds": 22.154456375,
+          "estimated_av_offset_us": null,
+          "hdr_uploaded_frames": 0,
+          "hidden_replaced_frames": 0,
+          "hls_audio_samples_per_channel": 0,
+          "idle_inhibition_active": false,
+          "idle_inhibition_supported": false,
+          "last_receive_to_present_us": 3319,
+          "latency_sample_count": 1076,
+          "latency_sample_window": 4096,
+          "p95_new_submission_interval_us": 19187,
+          "p95_receive_to_present_us": 10570,
+          "p99_new_submission_interval_us": 25161,
+          "p99_receive_to_present_us": 16560,
+          "pending_scheduled_frames": 0,
+          "presentation_measurement": "GPU render submission, not physical display time",
+          "presented_frames": 1076,
+          "receiver_view_builds": 31,
+          "render_adapter": "llvmpipe (LLVM 19.1.7, 256 bits) (Vulkan)",
+          "replaced_frames": 5,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "submission_interval_sample_count": 1075,
+          "ten_bit_uploaded_frames": 0,
+          "ui_frame_events": 1081,
+          "uploaded_frames": 1076,
+          "video_colour_mapping": "No displayed video"
+        },
+        "measured_seconds": 15.000459872011561,
+        "receiver_cpu_percent_one_core": 165.52825854578484,
+        "private_resident_mib_median": 122.0234375,
+        "private_resident_mib_peak": 122.03515625,
+        "resource_samples": [
+          {
+            "seconds": 0.002829728997312486,
+            "cpu_seconds": 0.0,
+            "private_resident_mib": 121.98046875
+          },
+          {
+            "seconds": 1.0053321050072554,
+            "cpu_seconds": 1.6400000000000006,
+            "private_resident_mib": 122.0
+          },
+          {
+            "seconds": 2.008683773019584,
+            "cpu_seconds": 3.290000000000001,
+            "private_resident_mib": 122.00390625
+          },
+          {
+            "seconds": 3.011251888005063,
+            "cpu_seconds": 4.880000000000001,
+            "private_resident_mib": 122.00390625
+          },
+          {
+            "seconds": 4.014867712015985,
+            "cpu_seconds": 6.470000000000001,
+            "private_resident_mib": 122.00390625
+          },
+          {
+            "seconds": 5.017340584017802,
+            "cpu_seconds": 8.05,
+            "private_resident_mib": 122.0078125
+          },
+          {
+            "seconds": 6.021404047001852,
+            "cpu_seconds": 9.75,
+            "private_resident_mib": 122.01953125
+          },
+          {
+            "seconds": 7.023876295017544,
+            "cpu_seconds": 11.39,
+            "private_resident_mib": 122.0234375
+          },
+          {
+            "seconds": 8.026282042003004,
+            "cpu_seconds": 13.0,
+            "private_resident_mib": 122.0234375
+          },
+          {
+            "seconds": 9.028855145006673,
+            "cpu_seconds": 14.600000000000001,
+            "private_resident_mib": 122.03125
+          },
+          {
+            "seconds": 10.031379897001898,
+            "cpu_seconds": 16.26,
+            "private_resident_mib": 122.03125
+          },
+          {
+            "seconds": 11.03404013600084,
+            "cpu_seconds": 18.15,
+            "private_resident_mib": 122.03125
+          },
+          {
+            "seconds": 12.036541191017022,
+            "cpu_seconds": 19.84,
+            "private_resident_mib": 122.03125
+          },
+          {
+            "seconds": 13.039569774002302,
+            "cpu_seconds": 21.55,
+            "private_resident_mib": 122.03515625
+          },
+          {
+            "seconds": 14.043377920024795,
+            "cpu_seconds": 23.21,
+            "private_resident_mib": 122.03515625
+          }
+        ],
+        "sender_lateness_p99_ms": 0.6192989822011441
+      },
+      {
+        "version": "release",
+        "case": "h264",
+        "run": 2,
+        "sent_video_frames": 1080,
+        "metrics": {
+          "audio_errors": 0,
+          "audio_output_latency_us": 0,
+          "audio_packets": 1801,
+          "audio_recovered": 0,
+          "audio_underruns": 0,
+          "av_measurement": "Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
+          "decoded_frames": 1080,
+          "elapsed_seconds": 22.350553958,
+          "estimated_av_offset_us": null,
+          "hdr_uploaded_frames": 0,
+          "hidden_replaced_frames": 0,
+          "hls_audio_samples_per_channel": 0,
+          "idle_inhibition_active": false,
+          "idle_inhibition_supported": false,
+          "last_receive_to_present_us": 2186,
+          "latency_sample_count": 1077,
+          "latency_sample_window": 4096,
+          "p95_new_submission_interval_us": 18622,
+          "p95_receive_to_present_us": 7753,
+          "p99_new_submission_interval_us": 26338,
+          "p99_receive_to_present_us": 14662,
+          "pending_scheduled_frames": 0,
+          "presentation_measurement": "GPU render submission, not physical display time",
+          "presented_frames": 1077,
+          "receiver_view_builds": 30,
+          "render_adapter": "llvmpipe (LLVM 19.1.7, 256 bits) (Vulkan)",
+          "replaced_frames": 4,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "submission_interval_sample_count": 1076,
+          "ten_bit_uploaded_frames": 0,
+          "ui_frame_events": 1081,
+          "uploaded_frames": 1077,
+          "video_colour_mapping": "No displayed video"
+        },
+        "measured_seconds": 15.000594644981902,
+        "receiver_cpu_percent_one_core": 145.79422027990134,
+        "private_resident_mib_median": 116.6484375,
+        "private_resident_mib_peak": 116.66015625,
+        "resource_samples": [
+          {
+            "seconds": 0.00608482799725607,
+            "cpu_seconds": 0.0,
+            "private_resident_mib": 116.4296875
+          },
+          {
+            "seconds": 1.0097297340107616,
+            "cpu_seconds": 1.6000000000000005,
+            "private_resident_mib": 116.59375
+          },
+          {
+            "seconds": 2.016386503004469,
+            "cpu_seconds": 3.38,
+            "private_resident_mib": 116.61328125
+          },
+          {
+            "seconds": 3.0196141969936434,
+            "cpu_seconds": 4.830000000000001,
+            "private_resident_mib": 116.61328125
+          },
+          {
+            "seconds": 4.02348874299787,
+            "cpu_seconds": 6.320000000000001,
+            "private_resident_mib": 116.62109375
+          },
+          {
+            "seconds": 5.026362881006207,
+            "cpu_seconds": 7.760000000000001,
+            "private_resident_mib": 116.62890625
+          },
+          {
+            "seconds": 6.031015221000416,
+            "cpu_seconds": 9.25,
+            "private_resident_mib": 116.640625
+          },
+          {
+            "seconds": 7.033677706000162,
+            "cpu_seconds": 10.690000000000001,
+            "private_resident_mib": 116.6484375
+          },
+          {
+            "seconds": 8.03695850999793,
+            "cpu_seconds": 12.09,
+            "private_resident_mib": 116.6484375
+          },
+          {
+            "seconds": 9.042847812990658,
+            "cpu_seconds": 13.54,
+            "private_resident_mib": 116.65234375
+          },
+          {
+            "seconds": 10.045341165008722,
+            "cpu_seconds": 14.93,
+            "private_resident_mib": 116.65625
+          },
+          {
+            "seconds": 11.04812434798805,
+            "cpu_seconds": 16.41,
+            "private_resident_mib": 116.65625
+          },
+          {
+            "seconds": 12.050681207008893,
+            "cpu_seconds": 17.75,
+            "private_resident_mib": 116.65625
+          },
+          {
+            "seconds": 13.053612024988979,
+            "cpu_seconds": 19.13,
+            "private_resident_mib": 116.65625
+          },
+          {
+            "seconds": 14.056141890003346,
+            "cpu_seconds": 20.57,
+            "private_resident_mib": 116.66015625
+          }
+        ],
+        "sender_lateness_p99_ms": 0.2944346924778074
+      },
+      {
+        "version": "current",
+        "case": "h264",
+        "run": 2,
+        "sent_video_frames": 1080,
+        "metrics": {
+          "active_protocol": null,
+          "audio_errors": 0,
+          "audio_output_latency_us": 0,
+          "audio_packets": 1801,
+          "audio_recovered": 0,
+          "audio_underruns": 0,
+          "av_measurement": "Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
+          "decoded_frames": 1080,
+          "elapsed_seconds": 22.34998929,
+          "estimated_av_offset_us": null,
+          "hdr_uploaded_frames": 0,
+          "hidden_replaced_frames": 0,
+          "hls_audio_samples_per_channel": 0,
+          "idle_inhibition_active": false,
+          "idle_inhibition_supported": false,
+          "last_receive_to_present_us": 2431,
+          "latency_sample_count": 1075,
+          "latency_sample_window": 4096,
+          "p95_new_submission_interval_us": 17762,
+          "p95_receive_to_present_us": 4628,
+          "p99_new_submission_interval_us": 23585,
+          "p99_receive_to_present_us": 10808,
+          "pending_scheduled_frames": 0,
+          "presentation_measurement": "GPU render submission, not physical display time",
+          "presented_frames": 1075,
+          "receiver_view_builds": 31,
+          "render_adapter": "llvmpipe (LLVM 19.1.7, 256 bits) (Vulkan)",
+          "replaced_frames": 6,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "submission_interval_sample_count": 1074,
+          "ten_bit_uploaded_frames": 0,
+          "ui_frame_events": 1081,
+          "uploaded_frames": 1075,
+          "video_colour_mapping": "No displayed video"
+        },
+        "measured_seconds": 15.000478094007121,
+        "receiver_cpu_percent_one_core": 139.32889251276472,
+        "private_resident_mib_median": 116.28515625,
+        "private_resident_mib_peak": 116.30859375,
+        "resource_samples": [
+          {
+            "seconds": 0.003291289001936093,
+            "cpu_seconds": 0.0,
+            "private_resident_mib": 116.0859375
+          },
+          {
+            "seconds": 1.0061139460012782,
+            "cpu_seconds": 1.4400000000000004,
+            "private_resident_mib": 116.25390625
+          },
+          {
+            "seconds": 2.00871662501595,
+            "cpu_seconds": 2.8900000000000006,
+            "private_resident_mib": 116.26171875
+          },
+          {
+            "seconds": 3.0116204490186647,
+            "cpu_seconds": 4.25,
+            "private_resident_mib": 116.26953125
+          },
+          {
+            "seconds": 4.014527749008266,
+            "cpu_seconds": 5.640000000000001,
+            "private_resident_mib": 116.26953125
+          },
+          {
+            "seconds": 5.017312628013315,
+            "cpu_seconds": 6.970000000000001,
+            "private_resident_mib": 116.26953125
+          },
+          {
+            "seconds": 6.020271965011489,
+            "cpu_seconds": 8.4,
+            "private_resident_mib": 116.28515625
+          },
+          {
+            "seconds": 7.023160245997133,
+            "cpu_seconds": 9.86,
+            "private_resident_mib": 116.28515625
+          },
+          {
+            "seconds": 8.0270265309955,
+            "cpu_seconds": 11.28,
+            "private_resident_mib": 116.2890625
+          },
+          {
+            "seconds": 9.029822333017364,
+            "cpu_seconds": 12.72,
+            "private_resident_mib": 116.296875
+          },
+          {
+            "seconds": 10.032576755009359,
+            "cpu_seconds": 14.040000000000001,
+            "private_resident_mib": 116.296875
+          },
+          {
+            "seconds": 11.035132178018102,
+            "cpu_seconds": 15.38,
+            "private_resident_mib": 116.296875
+          },
+          {
+            "seconds": 12.038003118999768,
+            "cpu_seconds": 16.75,
+            "private_resident_mib": 116.296875
+          },
+          {
+            "seconds": 13.040811190003296,
+            "cpu_seconds": 18.189999999999998,
+            "private_resident_mib": 116.296875
+          },
+          {
+            "seconds": 14.044645193993347,
+            "cpu_seconds": 19.58,
+            "private_resident_mib": 116.30859375
+          }
+        ],
+        "sender_lateness_p99_ms": 0.4250579804647714
+      },
+      {
+        "version": "release",
+        "case": "hevc",
+        "run": 2,
+        "sent_video_frames": 1080,
+        "metrics": {
+          "audio_errors": 0,
+          "audio_output_latency_us": 0,
+          "audio_packets": 1801,
+          "audio_recovered": 0,
+          "audio_underruns": 0,
+          "av_measurement": "Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
+          "decoded_frames": 1080,
+          "elapsed_seconds": 22.331541116,
+          "estimated_av_offset_us": null,
+          "hdr_uploaded_frames": 0,
+          "hidden_replaced_frames": 0,
+          "hls_audio_samples_per_channel": 0,
+          "idle_inhibition_active": false,
+          "idle_inhibition_supported": false,
+          "last_receive_to_present_us": 3224,
+          "latency_sample_count": 1079,
+          "latency_sample_window": 4096,
+          "p95_new_submission_interval_us": 18692,
+          "p95_receive_to_present_us": 8486,
+          "p99_new_submission_interval_us": 26479,
+          "p99_receive_to_present_us": 15696,
+          "pending_scheduled_frames": 0,
+          "presentation_measurement": "GPU render submission, not physical display time",
+          "presented_frames": 1079,
+          "receiver_view_builds": 31,
+          "render_adapter": "llvmpipe (LLVM 19.1.7, 256 bits) (Vulkan)",
+          "replaced_frames": 2,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "submission_interval_sample_count": 1078,
+          "ten_bit_uploaded_frames": 0,
+          "ui_frame_events": 1081,
+          "uploaded_frames": 1079,
+          "video_colour_mapping": "No displayed video"
+        },
+        "measured_seconds": 15.000471612002002,
+        "receiver_cpu_percent_one_core": 164.32816672428706,
+        "private_resident_mib_median": 121.80078125,
+        "private_resident_mib_peak": 121.81640625,
+        "resource_samples": [
+          {
+            "seconds": 0.003445640002610162,
+            "cpu_seconds": 0.0,
+            "private_resident_mib": 121.76171875
+          },
+          {
+            "seconds": 1.0067087380157318,
+            "cpu_seconds": 1.6100000000000003,
+            "private_resident_mib": 121.76171875
+          },
+          {
+            "seconds": 2.009380372997839,
+            "cpu_seconds": 3.250000000000001,
+            "private_resident_mib": 121.78125
+          },
+          {
+            "seconds": 3.0118950309988577,
+            "cpu_seconds": 4.830000000000001,
+            "private_resident_mib": 121.78125
+          },
+          {
+            "seconds": 4.014363453024998,
+            "cpu_seconds": 6.489999999999999,
+            "private_resident_mib": 121.7890625
+          },
+          {
+            "seconds": 5.01729705001344,
+            "cpu_seconds": 8.239999999999998,
+            "private_resident_mib": 121.7890625
+          },
+          {
+            "seconds": 6.020600628020475,
+            "cpu_seconds": 10.010000000000002,
+            "private_resident_mib": 121.80078125
+          },
+          {
+            "seconds": 7.023158440017141,
+            "cpu_seconds": 11.82,
+            "private_resident_mib": 121.80078125
+          },
+          {
+            "seconds": 8.027084489003755,
+            "cpu_seconds": 13.440000000000001,
+            "private_resident_mib": 121.80078125
+          },
+          {
+            "seconds": 9.029525870020734,
+            "cpu_seconds": 15.080000000000002,
+            "private_resident_mib": 121.8125
+          },
+          {
+            "seconds": 10.03197494300548,
+            "cpu_seconds": 16.66,
+            "private_resident_mib": 121.8125
+          },
+          {
+            "seconds": 11.03446504601743,
+            "cpu_seconds": 18.26,
+            "private_resident_mib": 121.81640625
+          },
+          {
+            "seconds": 12.037191311013885,
+            "cpu_seconds": 19.84,
+            "private_resident_mib": 121.81640625
+          },
+          {
+            "seconds": 13.039561399025843,
+            "cpu_seconds": 21.380000000000003,
+            "private_resident_mib": 121.81640625
+          },
+          {
+            "seconds": 14.043372981017455,
+            "cpu_seconds": 23.02,
+            "private_resident_mib": 121.81640625
+          }
+        ],
+        "sender_lateness_p99_ms": 0.5587569903582335
+      },
+      {
+        "version": "current",
+        "case": "hevc",
+        "run": 2,
+        "sent_video_frames": 1080,
+        "metrics": {
+          "active_protocol": null,
+          "audio_errors": 0,
+          "audio_output_latency_us": 0,
+          "audio_packets": 1801,
+          "audio_recovered": 0,
+          "audio_underruns": 0,
+          "av_measurement": "Predicted CPAL audible clock versus frame PTS, not measured speaker/display offset",
+          "decoded_frames": 1080,
+          "elapsed_seconds": 22.440497748,
+          "estimated_av_offset_us": null,
+          "hdr_uploaded_frames": 0,
+          "hidden_replaced_frames": 0,
+          "hls_audio_samples_per_channel": 0,
+          "idle_inhibition_active": false,
+          "idle_inhibition_supported": false,
+          "last_receive_to_present_us": 3133,
+          "latency_sample_count": 1079,
+          "latency_sample_window": 4096,
+          "p95_new_submission_interval_us": 18387,
+          "p95_receive_to_present_us": 7136,
+          "p99_new_submission_interval_us": 23532,
+          "p99_receive_to_present_us": 16495,
+          "pending_scheduled_frames": 0,
+          "presentation_measurement": "GPU render submission, not physical display time",
+          "presented_frames": 1079,
+          "receiver_view_builds": 31,
+          "render_adapter": "llvmpipe (LLVM 19.1.7, 256 bits) (Vulkan)",
+          "replaced_frames": 1,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "submission_interval_sample_count": 1078,
+          "ten_bit_uploaded_frames": 0,
+          "ui_frame_events": 1081,
+          "uploaded_frames": 1079,
+          "video_colour_mapping": "No displayed video"
+        },
+        "measured_seconds": 15.000529604993062,
+        "receiver_cpu_percent_one_core": 161.79428752916505,
+        "private_resident_mib_median": 121.296875,
+        "private_resident_mib_peak": 121.3125,
+        "resource_samples": [
+          {
+            "seconds": 0.003688369004521519,
+            "cpu_seconds": 0.0,
+            "private_resident_mib": 121.26953125
+          },
+          {
+            "seconds": 1.0068728129845113,
+            "cpu_seconds": 1.6099999999999994,
+            "private_resident_mib": 121.2734375
+          },
+          {
+            "seconds": 2.0108372239919845,
+            "cpu_seconds": 3.3500000000000005,
+            "private_resident_mib": 121.2734375
+          },
+          {
+            "seconds": 3.01402141500148,
+            "cpu_seconds": 4.94,
+            "private_resident_mib": 121.2734375
+          },
+          {
+            "seconds": 4.016901321010664,
+            "cpu_seconds": 6.72,
+            "private_resident_mib": 121.2734375
+          },
+          {
+            "seconds": 5.021640427992679,
+            "cpu_seconds": 8.370000000000001,
+            "private_resident_mib": 121.2734375
+          },
+          {
+            "seconds": 6.024250504007796,
+            "cpu_seconds": 9.969999999999999,
+            "private_resident_mib": 121.2890625
+          },
+          {
+            "seconds": 7.026973038999131,
+            "cpu_seconds": 11.529999999999998,
+            "private_resident_mib": 121.296875
+          },
+          {
+            "seconds": 8.02965000498807,
+            "cpu_seconds": 13.07,
+            "private_resident_mib": 121.296875
+          },
+          {
+            "seconds": 9.032466881995788,
+            "cpu_seconds": 14.669999999999998,
+            "private_resident_mib": 121.30078125
+          },
+          {
+            "seconds": 10.035164453991456,
+            "cpu_seconds": 16.259999999999998,
+            "private_resident_mib": 121.30859375
+          },
+          {
+            "seconds": 11.038737333001336,
+            "cpu_seconds": 17.82,
+            "private_resident_mib": 121.30859375
+          },
+          {
+            "seconds": 12.041768227005377,
+            "cpu_seconds": 19.529999999999998,
+            "private_resident_mib": 121.30859375
+          },
+          {
+            "seconds": 13.044365526991896,
+            "cpu_seconds": 21.189999999999998,
+            "private_resident_mib": 121.30859375
+          },
+          {
+            "seconds": 14.047379047988215,
+            "cpu_seconds": 22.779999999999998,
+            "private_resident_mib": 121.3125
+          }
+        ],
+        "sender_lateness_p99_ms": 0.32095867209136486
+      }
+    ],
+    "medians": {
+      "h264": {
+        "release": {
+          "receiver_cpu_percent_one_core": 144.99444095154493,
+          "private_resident_mib_median": 116.6484375,
+          "private_resident_mib_peak": 116.66015625,
+          "decoded_frames": 1080,
+          "presented_frames": 1078,
+          "replaced_frames": 3,
+          "hidden_replaced_frames": 0,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "p95_receive_to_present_us": 4843,
+          "p99_receive_to_present_us": 11535,
+          "p95_new_submission_interval_us": 18098,
+          "p99_new_submission_interval_us": 25276
+        },
+        "current": {
+          "receiver_cpu_percent_one_core": 144.26118756908818,
+          "private_resident_mib_median": 116.28515625,
+          "private_resident_mib_peak": 116.30859375,
+          "decoded_frames": 1080,
+          "presented_frames": 1079,
+          "replaced_frames": 1,
+          "hidden_replaced_frames": 0,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "p95_receive_to_present_us": 5798,
+          "p99_receive_to_present_us": 12013,
+          "p95_new_submission_interval_us": 18234,
+          "p99_new_submission_interval_us": 24823
+        }
+      },
+      "hevc": {
+        "release": {
+          "receiver_cpu_percent_one_core": 165.52825854578484,
+          "private_resident_mib_median": 121.80078125,
+          "private_resident_mib_peak": 122.03515625,
+          "decoded_frames": 1080,
+          "presented_frames": 1076,
+          "replaced_frames": 5,
+          "hidden_replaced_frames": 0,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "p95_receive_to_present_us": 10357,
+          "p99_receive_to_present_us": 16560,
+          "p95_new_submission_interval_us": 19187,
+          "p99_new_submission_interval_us": 26479
+        },
+        "current": {
+          "receiver_cpu_percent_one_core": 169.3271372129459,
+          "private_resident_mib_median": 121.43359375,
+          "private_resident_mib_peak": 121.44921875,
+          "decoded_frames": 1080,
+          "presented_frames": 1075,
+          "replaced_frames": 5,
+          "hidden_replaced_frames": 0,
+          "schedule_dropped": 0,
+          "stale_dropped": 0,
+          "p95_receive_to_present_us": 10170,
+          "p99_receive_to_present_us": 16495,
+          "p95_new_submission_interval_us": 19447,
+          "p99_new_submission_interval_us": 27869
+        }
+      }
+    }
+  },
+  "source_sha256": {
+    "rust/src/session.rs": "02866b0a8e2d54d2078f48253520bbd80ce5d5d74468b96561951eb0c803d023",
+    "tools/rust_release_benchmark.py": "8953785389a2ce7003e977f5cc9934ce4a122b7d1f1842968cf07dad5fe97132",
+    "Cargo.lock": "5328c2195d82fc3bb58000977bf0c2af844e7dee0be337ed7d37655527d3a377"
+  }
+}

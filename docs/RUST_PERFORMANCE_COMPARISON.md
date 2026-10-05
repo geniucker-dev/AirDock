@@ -133,6 +133,61 @@ Private RSS was essentially equal for mirror playback; HLS increased by 4.35 MiB
 differed by only 0.130 ms. This focused rerun found no material throughput or
 resource regression from the status fix; it does not erase the observed tails.
 
+## Additional review: mirror/control isolation
+
+Receiver code: `dce6cbadd0c0e21b3d6bad414c3482404febcb94`.
+Rechecking all 74 original runs reproduced their totals, resource medians and
+binary hashes. Linux and Windows CI for `24cb1900fc4a0cebcba20e25fd1cb4588218ca55`
+[passed](https://github.com/geniucker-dev/AirDock/actions/runs/37329532670), including
+Windows packaged playback, installer upgrade/uninstall and updater checks.
+
+The mirror transport still read `Sessions::owner_id()` through the ownership
+gate before each packet. An independent control holding that gate prevented the
+observer from answering within its one-second test deadline. This can stall
+mirror reception even after UI protocol status was isolated. The ownership ID
+now uses an atomic observer, published only by successful claim/final cleanup
+under the original gate. Controls still authorize against the gate. Worker joins,
+handover and stale teardown protection are unchanged; no media queue, decoder,
+texture upload or audio callback changes were needed.
+
+The reproduction now answers before the control finishes. A second regression
+holds cleanup open and verifies both observers remain readable, then clear after
+cleanup. All 83 library tests and 2 updater tests passed, as did formatting,
+Clippy and the dependency audit. Optimized GUI reconnect submitted 390/390 frames
+across 13 cases; fMP4 playback submitted 30/30. Active-session SIGINT/SIGTERM
+cleanup took 0.767/0.766 seconds and released the listener.
+
+Twelve additional measured processes used three paired rounds per mirror codec,
+15 seconds playback plus 3 seconds video warmup, with the same release baseline,
+bitstreams and software environment. Each codec/version decoded all 3,240 input
+frames. This is ordinary playback coverage; deliberate control contention is
+covered by the deterministic concurrency regressions rather than these timings.
+
+| Scenario / version | Submitted (total) | Receive to submit P95 / P99 (ms) | New-submit interval P95 / P99 (ms) | CPU (%) | Private RSS (MiB) |
+|---|---:|---:|---:|---:|---:|
+| H.264 1080p60 / release | 3234 | 4.843 / 11.535 | 18.098 / 25.276 | 144.99 | 116.65 |
+| H.264 1080p60 / current | 3233 | 5.798 / 12.013 | 18.234 / 24.823 | 144.26 | 116.29 |
+| HEVC 1080p60 / release | 3227 | 10.357 / 16.560 | 19.187 / 26.479 | 165.53 | 121.80 |
+| HEVC 1080p60 / current | 3227 | 10.170 / 16.495 | 19.447 / 27.869 | 169.33 | 121.43 |
+
+H.264 throughput differed by -0.031%; HEVC submission totals were identical.
+Mirror private RSS did not increase. HEVC median CPU was 3.80 percentage points
+of one core higher (2.3% relative); interval P99 was 1.390 ms higher. Paired CPU
+differences were -0.867, +7.796 and -2.534 points, so the direction was not
+consistent. HEVC internal P99 differences were -3.321, +2.806 and +0.799 ms.
+These small samples show no material submission-throughput loss but cannot
+establish equivalent CPU/tail performance. The earlier higher HEVC tails remain
+part of the evidence; changing percentile medians across runs is not proof that
+this fix removed them. Windows/iPhone physical acceptance is still pending.
+
+[Additional raw runs, binary/input/source hashes and regression results](benchmarks/2026-10-05-control-isolation.json)
+are separate from the original data. To reproduce this candidate, substitute
+`dce6cbadd0c0e21b3d6bad414c3482404febcb94` for the candidate worktree and
+`--current-commit` below, and use `--cases h264 hevc --runs 3 --seconds 15`.
+Across both evidence files there are 86 measured process runs. HLS, idle and
+hidden performance measurements remain those of the preceding comparison;
+only HLS functional playback was repeated for this additional fix.
+
 ## Reproduction and evidence
 
 [Machine-readable runs, hashes, input manifests, resource samples and regressions](benchmarks/2026-10-05-release-comparison.json)
