@@ -360,6 +360,36 @@ mod native {
         }
     }
 
+    pub struct Discovery {
+        _services: Vec<Registration>,
+    }
+    impl Discovery {
+        pub fn start(device: &Device) -> Result<Self> {
+            let name = device.shared.settings.read().unwrap().name.clone();
+            let host = format!(
+                "{}.local",
+                std::env::var("COMPUTERNAME").unwrap_or_else(|_| crate::brand::NAME.into())
+            );
+            let (airplay, raop) = properties(device);
+            let services = vec![
+                Registration::new(
+                    &format!("{name}._airplay._tcp.local"),
+                    &host,
+                    device.port,
+                    airplay,
+                )?,
+                Registration::new(
+                    &format!("{}@{name}._raop._tcp.local", device.mac.replace(':', "")),
+                    &host,
+                    device.port,
+                    raop,
+                )?,
+            ];
+            Ok(Self {
+                _services: services,
+            })
+        }
+    }
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -389,36 +419,6 @@ mod native {
             service.close().unwrap();
             // A second close is harmless and cannot issue another native call.
             service.close().unwrap();
-        }
-    }
-    pub struct Discovery {
-        _services: Vec<Registration>,
-    }
-    impl Discovery {
-        pub fn start(device: &Device) -> Result<Self> {
-            let name = device.shared.settings.read().unwrap().name.clone();
-            let host = format!(
-                "{}.local",
-                std::env::var("COMPUTERNAME").unwrap_or_else(|_| crate::brand::NAME.into())
-            );
-            let (airplay, raop) = properties(device);
-            let services = vec![
-                Registration::new(
-                    &format!("{name}._airplay._tcp.local"),
-                    &host,
-                    device.port,
-                    airplay,
-                )?,
-                Registration::new(
-                    &format!("{}@{name}._raop._tcp.local", device.mac.replace(':', "")),
-                    &host,
-                    device.port,
-                    raop,
-                )?,
-            ];
-            Ok(Self {
-                _services: services,
-            })
         }
     }
 }
