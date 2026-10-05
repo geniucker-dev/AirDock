@@ -31,6 +31,11 @@ Physical hardware acceptance is recorded separately.
   frame replacements are reported separately from visible playback skips.
 - Runtime regressions verify independent audio/window/language updates survive a stale
   settings form, and a failed file write does not change active settings.
+- Discovery regressions cover cancellation racing success, queued/late completion
+  withdrawal, stable receiver/display identity and TXT versus `/info` consistency.
+  Windows CI additionally requires native registration and deregistration callbacks
+  to acknowledge success. These checks do not verify an iPhone's discovery cache
+  or removal of advertisements left by an older application.
 - Encrypted fullscreen video reaches both screen edges with black aspect-ratio
   bars instead of UI chrome. Entry from settings/startup and page restoration,
   audio-only hiding, manual hide plus FLUSH and new-session auto-reveal are

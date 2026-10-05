@@ -2,7 +2,7 @@
 use crate::{
     config::{Settings, WindowPreferences},
     crypto,
-    discovery::Discovery,
+    discovery::{Discovery, advertisement_changed},
     platform,
     server::{Device, Server},
     state::Shared,
@@ -91,13 +91,18 @@ impl Runtime {
                                     }
                                     return Err(error);
                                 }
+                                let restart_discovery = discovery.is_none()
+                                    || advertisement_changed(&current, &settings);
                                 *state.settings.write().unwrap() = settings;
-                                drop(discovery.take());
-                                match Discovery::start(server.device()) {
-                                    Ok(d) => discovery = Some(d),
-                                    Err(e) => state.report(format!(
-                                        "Settings saved; discovery unavailable: {e:#}"
-                                    )),
+                                if restart_discovery {
+                                    // Complete withdrawal before publishing a replacement.
+                                    drop(discovery.take());
+                                    match Discovery::start(server.device()) {
+                                        Ok(d) => discovery = Some(d),
+                                        Err(e) => state.report(format!(
+                                            "Settings saved; discovery unavailable: {e:#}"
+                                        )),
+                                    }
                                 }
                                 Ok(())
                             })();

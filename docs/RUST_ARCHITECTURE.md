@@ -29,6 +29,26 @@ separate ownership. Command, status and media channels are separate. Device
 objects are confined to their control/output threads; GPU objects to the
 compositor/renderer. Status messages never contain video planes or PCM.
 
+## Discovery and receiver identity
+
+AirPlay TXT records and `/info` share a receiver UUID derived from the persisted
+pairing public key. The display UUID has a separate domain; neither depends on
+the receiver name, port or network adapter. Existing pairing keys remain intact.
+Only name/HLS/HEVC changes restart discovery; unrelated preference saves keep
+the active advertisements.
+
+Windows shutdown waits for registration completion, cancels pending operations
+and waits for `DnsServiceDeRegister` acknowledgement. Successful registrations
+carry a withdrawal lease through the completion channel, so late success after
+cancellation or an abandoned receiver still initiates withdrawal. Request,
+cancellation and TXT backing storage survive until their native callbacks.
+Waits are bounded and failures are logged. Other platforms acknowledge service
+withdrawal and daemon shutdown before leaving the receiver runtime.
+
+This lifecycle cannot reliably remove historical records registered by another
+application or cached by an iPhone. Verifying disappearance from a physical
+device's picker requires Windows/iPhone network testing.
+
 ## Clocks and scheduling
 
 Media timestamps retain rational timebases. Mirroring records preserve source

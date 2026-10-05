@@ -8,7 +8,7 @@ use crate::{
 use anyhow::{Context, Result, bail, ensure};
 use ed25519_dalek::SigningKey;
 use plist::Value;
-use sha2::{Digest, Sha512};
+use sha2::{Digest, Sha256, Sha512};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{
     collections::BTreeMap,
@@ -22,6 +22,8 @@ use std::{
 pub struct Device {
     pub identity: SigningKey,
     pub mac: String,
+    pub receiver_id: String,
+    pub display_id: String,
     pub port: u16,
     pub shared: Arc<Shared>,
     pub hls: crate::hls::Hls,
@@ -36,10 +38,15 @@ impl Device {
             .map(|b| format!("{b:02X}"))
             .collect::<Vec<_>>()
             .join(":");
+        let public_key = identity.verifying_key().to_bytes();
+        let receiver_id = receiver_uuid(&public_key, b"receiver");
+        let display_id = receiver_uuid(&public_key, b"display");
         let hls = crate::hls::Hls::new(shared.clone())?;
         Ok(Self {
             identity,
             mac,
+            receiver_id,
+            display_id,
             port,
             shared,
             hls,
@@ -68,10 +75,7 @@ impl Device {
             ("maxFPS", uint(s.max_fps as u64)),
             ("rotation", uint(0)),
             ("overscanned", Value::Boolean(false)),
-            (
-                "uuid",
-                Value::String("e5f7a168-f1f9-4f51-9f9e-6a9cc0c8cc9f".into()),
-            ),
+            ("uuid", Value::String(self.display_id.clone())),
         ]);
         let low = if s.hls_enabled {
             0x5a7ffef7
@@ -84,10 +88,7 @@ impl Device {
             ("macAddress", Value::String(self.mac.clone())),
             ("model", Value::String("AppleTV3,2".into())),
             ("name", Value::String(s.name.clone())),
-            (
-                "pi",
-                Value::String("b08f5a79-db29-4384-b456-a4784d9e6055".into()),
-            ),
+            ("pi", Value::String(self.receiver_id.clone())),
             ("sourceVersion", Value::String("220.68".into())),
             ("features", uint(features)),
             ("statusFlags", uint(68)),
@@ -125,6 +126,27 @@ impl Device {
             ),
         ])
     }
+}
+
+// RFC 9562 UUIDv8: SHA-256 over the persisted pairing public key with
+// separate receiver/display domains. Names, ports and adapters do not affect it.
+fn receiver_uuid(public_key: &[u8; 32], domain: &[u8]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"AirDock/identity/v1/");
+    hash.update(domain);
+    hash.update(public_key);
+    let mut bytes: [u8; 16] = hash.finalize()[..16].try_into().unwrap();
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let id = hex::encode(bytes);
+    format!(
+        "{}-{}-{}-{}-{}",
+        &id[..8],
+        &id[8..12],
+        &id[12..16],
+        &id[16..20],
+        &id[20..]
+    )
 }
 
 pub struct Server {
