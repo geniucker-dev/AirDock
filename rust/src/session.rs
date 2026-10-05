@@ -26,6 +26,9 @@ pub struct Sessions {
     /// Observer snapshot; controls still authorize against the ownership gate.
     /// Publish under `owner`, but never retain this lock during control/cleanup.
     observed_protocol: Mutex<Option<ProtocolId>>,
+    /// Media workers only observe ownership. Their per-packet check must not
+    /// wait for auxiliary controls; zero denotes no owner, never a wire ID.
+    observed_owner_id: AtomicU64,
     next_id: AtomicU64,
     pub running: AtomicBool,
     pub disconnect: AtomicU64,
@@ -42,6 +45,7 @@ impl Default for Sessions {
         Self {
             owner: Mutex::new(None),
             observed_protocol: Mutex::new(None),
+            observed_owner_id: AtomicU64::new(0),
             next_id: AtomicU64::new(1),
             running: AtomicBool::new(true),
             disconnect: AtomicU64::new(0),
@@ -63,7 +67,8 @@ impl Sessions {
             .expect("Receiver session ID space exhausted")
     }
     pub fn owner_id(&self) -> Option<u64> {
-        self.owner.lock().unwrap().as_ref().map(|o| o.id)
+        let id = self.observed_owner_id.load(Ordering::Acquire);
+        (id != 0).then_some(id)
     }
     pub fn active_protocol(&self) -> Option<ProtocolId> {
         *self.observed_protocol.lock().unwrap()
@@ -134,6 +139,7 @@ impl Sessions {
         });
         *owner = Some(lease.clone());
         *self.observed_protocol.lock().unwrap() = Some(protocol);
+        self.observed_owner_id.store(id, Ordering::Release);
         Some(lease)
     }
     /// Workers must be joined first. Keep the ownership gate closed until old
@@ -148,6 +154,7 @@ impl Sessions {
             cleanup();
             *owner = None;
             *self.observed_protocol.lock().unwrap() = None;
+            self.observed_owner_id.store(0, Ordering::Release);
         }
         drop(owner);
         *lease.done.lock().unwrap() = true;
@@ -214,7 +221,7 @@ mod tests {
         )
     }
     #[test]
-    fn protocol_status_does_not_wait_for_an_in_flight_control() {
+    fn session_observers_do_not_wait_for_an_in_flight_control() {
         use std::sync::mpsc;
         let sessions = Arc::new(Sessions::default());
         let lease = claim(
@@ -236,13 +243,63 @@ mod tests {
         ready.recv_timeout(Duration::from_secs(1)).unwrap();
         let (reply, result) = mpsc::channel();
         let status = sessions.clone();
-        let observer = std::thread::spawn(move || reply.send(status.active_protocol()).unwrap());
+        let observer = std::thread::spawn(move || {
+            reply
+                .send((status.owner_id(), status.active_protocol()))
+                .unwrap()
+        });
         let observed = result.recv_timeout(Duration::from_secs(1));
         finish.send(()).unwrap();
         control.join().unwrap();
         observer.join().unwrap();
-        assert_eq!(observed.ok(), Some(Some(ProtocolId::AIRPLAY)));
+        assert_eq!(
+            observed.ok(),
+            Some((Some(lease.id), Some(ProtocolId::AIRPLAY)))
+        );
         sessions.release(&lease, || {});
+        assert_eq!(sessions.owner_id(), None);
+        assert_eq!(sessions.active_protocol(), None);
+    }
+    #[test]
+    fn session_observers_stay_available_until_cleanup_finishes() {
+        use std::sync::mpsc;
+        let sessions = Arc::new(Sessions::default());
+        let lease = claim(
+            &sessions,
+            ProtocolId::AIRPLAY,
+            "127.0.0.1".parse().unwrap(),
+            ReconnectPolicy::Reject,
+        )
+        .unwrap();
+        let (entered, ready) = mpsc::channel();
+        let (finish, wait) = mpsc::channel();
+        let cleanup_sessions = sessions.clone();
+        let old = lease.clone();
+        let cleanup = std::thread::spawn(move || {
+            cleanup_sessions.release(&old, || {
+                entered.send(()).unwrap();
+                wait.recv().unwrap();
+            });
+        });
+        ready.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (reply, result) = mpsc::channel();
+        let status = sessions.clone();
+        let observer = std::thread::spawn(move || {
+            reply
+                .send((status.owner_id(), status.active_protocol()))
+                .unwrap()
+        });
+        let observed = result.recv_timeout(Duration::from_secs(1));
+        assert!(!*lease.done.lock().unwrap());
+        finish.send(()).unwrap();
+        cleanup.join().unwrap();
+        observer.join().unwrap();
+        assert_eq!(
+            observed.ok(),
+            Some((Some(lease.id), Some(ProtocolId::AIRPLAY)))
+        );
+        assert!(*lease.done.lock().unwrap());
+        assert_eq!(sessions.owner_id(), None);
         assert_eq!(sessions.active_protocol(), None);
     }
     #[test]

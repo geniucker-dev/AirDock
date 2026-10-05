@@ -56,6 +56,12 @@ busy, not concurrent playback. Stale teardown cannot clear another lease or its
 video activity. Global disconnect/exit cancels the owner and invalidates media.
 Concurrent senders/mixing are outside this preparation.
 
+Ownership grants and auxiliary mutations use the ownership gate. Read-only
+protocol status uses a separate short snapshot lock; the mirror worker's
+per-packet ownership check reads an atomic session ID. These observations remain
+published until cleanup completes and never authorize a claim or a control.
+Slow control processing must not block UI observations or mirror reception.
+
 The media handoff retains `VideoFrame`'s owned FFmpeg reference, rational PTS,
 receive instant and generation. `PlaybackMode::Live` releases decoded video
 immediately; `Timed` waits for PTS against audible PCM or a monotonic anchor.
