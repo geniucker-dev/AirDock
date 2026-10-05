@@ -65,6 +65,7 @@ jobs:
           xvfb-run -a python tools/rust_player_integration.py --binary target/debug/airdock
           xvfb-run -a python tools/rust_preferences_ui.py --binary target/debug/airdock
           xvfb-run -a python tools/rust_locale_ui.py --binary target/debug/airdock
+          xvfb-run -a python tools/rust_updates_ui.py --binary target/debug/airdock
           xvfb-run -a python tools/rust_integration.py --gui --binary target/debug/airdock
           xvfb-run -a python tools/rust_integration.py --hdr --gui --binary target/debug/airdock
           xvfb-run -a python tools/rust_hls_integration.py --fmp4 --hdr pq --gui --binary target/debug/airdock

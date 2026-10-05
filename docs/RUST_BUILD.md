@@ -83,6 +83,12 @@ containing spaces and Unicode, checks hashes/DLLs, upgrades, plays from the
 installed clean PATH, and verifies uninstall/data preservation. Installers are
 currently unsigned.
 
+Build both `airdock.exe` and `airdock-updater.exe` for packaging. The updater is
+a separate executable with no FFmpeg import; packaging resolves and isolates
+its actual CRT DLL closure in `UPDATER_RUNTIME.json`, then runs it with a clean
+PATH. The Windows workflow exercises both update modes and locked-DLL rollback
+with `tools/rust_updater_verify.py` against the exact installer and ZIP.
+
 
 The manifest's overlay triplet builds release DLLs only; Rust debug and release
 use those same playback DLLs through FFMPEG_DIR. The native cache is saved after
@@ -90,6 +96,9 @@ actual DLL ABI/license/encoder/source checks, so later Rust lint/test failures d
 not force a second cold FFmpeg build. A restored cache must pass both that check
 and the independent final package audit. Cargo build caches are saved on failure;
 Cargo fingerprints and successful final builds remain mandatory before packaging.
+An exact native cache hit reuses the installed payload without re-running vcpkg;
+this avoids path-only rebuilds after a repository rename. Missing material or a
+failed actual-DLL audit still fails the build rather than accepting the cache.
 
 Corresponding build material includes `sources/native-build` (vcpkg ports),
 `sources/native-triplets`, the original manifest/toolchain and the FFmpeg source

@@ -102,13 +102,18 @@ def main():
                     media.send_mirror(connection, key, paths[1:2])
                     time.sleep(1.3)
                     assert visible_window() is None, 'Same session/FLUSH reopened a deliberately hidden window'
+                    teardown(connection, streams_only=True)
+                    media.send_mirror(connection, key, paths[1:2])
+                    window = wait_window()
+                    hide(window)
                     teardown(connection)
                     connection.close()
                     connection = media.pair.Conn('127.0.0.1', 7016)
                     key = setup_keys(connection)
                     media.send_mirror(connection, key, paths[1:2])
                     window = wait_window()
-                    results[case] = {'audio_only_hidden': 'passed', 'same_session_flush_hidden': 'passed', 'reconnect_revealed': 'passed'}
+                    results[case] = {'audio_only_hidden': 'passed', 'same_session_flush_hidden': 'passed',
+                                     'same_control_video_restart_revealed': 'passed', 'reconnect_revealed': 'passed'}
                 teardown(connection)
                 connection.close()
                 connection = None
@@ -122,7 +127,7 @@ def main():
                     process.kill()
                     process.wait()
         record = json.loads(metrics.read_text())
-        assert record['decoded_frames'] == (90 if case=='hidden-reconnect' else 30), record
+        assert record['decoded_frames'] == (120 if case=='hidden-reconnect' else 30), record
         assert record['uploaded_frames'] > 0, record
         results[case]['metrics'] = record
     result = {'cases': results, 'windows_tray_hardware_acceptance': 'pending'}

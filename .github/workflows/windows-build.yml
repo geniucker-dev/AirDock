@@ -57,11 +57,18 @@ jobs:
       - name: Install pinned LGPL playback dependencies
         env:
           VCPKG_BINARY_SOURCES: clear
+          NATIVE_CACHE_HIT: ${{ steps.native-cache.outputs.cache-hit }}
         shell: pwsh
         run: |
           $nativeRoot = Join-Path $env:VCPKG_ROOT 'installed'
-          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet x64-windows "--x-manifest-root=$pwd/rust" "--x-install-root=$nativeRoot"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:NATIVE_CACHE_HIT -ne 'true') {
+            & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet x64-windows "--x-manifest-root=$pwd/rust" "--x-install-root=$nativeRoot"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          # Exact cache keys include overlay, manifest, baseline, compiler and SDK.
+          # Re-running vcpkg after a repository rename invalidates otherwise usable
+          # DLLs through absolute overlay paths. Reuse the audited payload instead;
+          # both the native API gate below and final package audit remain mandatory.
           foreach ($relative in @('x64-windows/include/libavcodec/avcodec.h', 'x64-windows/share/ffmpeg/ffmpeg-source.zip')) {
             if (-not (Test-Path (Join-Path $nativeRoot $relative))) { throw "Missing LGPL build material: $relative" }
           }
@@ -182,6 +189,8 @@ jobs:
           if (@($setup).Count -ne 1) { throw 'Expected exactly one installer' }
           python tools/rust_installer_verify.py --setup "$($setup.FullName)" --package dist-rust --output rust-validation/installer
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify standalone updater installation restart and portable rollback
+        run: python tools/rust_updater_verify.py --package dist-rust --distributions dist-release
       - uses: actions/upload-artifact@v4
         with:
           name: airdock-windows-x64-${{ github.sha }}

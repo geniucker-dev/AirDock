@@ -100,9 +100,12 @@ validation.
 
 Minimized/hidden windows suppress continuing media/UI frame notifications and video uploads.
 The first scheduled video after an empty mailbox sends one notification so a new
-receiving session can reveal its player promptly. The reveal latch uses the
-network session ID, not the media generation: manual hiding, FLUSH, seek and
-format switches cannot repeatedly steal focus. Audio-only sessions never reveal.
+receiving session can reveal its player promptly. A separate video presentation
+token changes when video stops and restarts, even on the same control connection.
+Manual hiding, FLUSH, seek and repeated SETUP preserve its reveal latch; audio-only
+sessions never reveal. Windows opened automatically from the tray return after
+video teardown and a short reconnect grace period. A replacement presentation
+cancels that return; manual restoration or leaving fullscreen keeps the window.
 One latest CPU frame is retained for restoration. Settings/platform status updates
 are coalesced; the daemon's low-frequency housekeeping is not an animation loop.
 Fullscreen removes navigation, title and control rows and uses the same video
@@ -120,6 +123,24 @@ be committed by resizing or selecting an audio device. Geometry changes are
 debounced; exit flushes pending preferences. Close-to-tray policy is distinct
 from minimize-to-tray; disabling close-to-tray minimizes to the taskbar while
 receiving continues.
+
+## In-application updates
+
+`update` owns stable-release metadata, daily check state, cancellation and
+downloads; `desktop/updates.rs` bridges typed completion messages to UI state.
+These jobs run outside media and presentation callbacks. Metadata and package
+SHA-256 come from the official GitHub API. Download attempts use GitHub first,
+then probe enabled mirrors only upon failure. No mirror supplies authoritative
+metadata. Background checks prompt without starting installation.
+
+User-confirmed Windows x64 updates download the matching installer or portable
+ZIP and validate its exact size and hash. A standalone `airdock-updater.exe`,
+with an independently audited runtime closure and no FFmpeg import, waits for
+graceful receiver exit before modifying files. Portable updates validate all
+manifest files, preserve untracked user files and roll back ordinary installation
+failures; installed updates invoke the per-user installer in the same directory.
+Configuration and pairing identity remain outside the payload. The helper
+restarts the receiver with its existing arguments and reports failures on restart.
 
 ## Distribution
 

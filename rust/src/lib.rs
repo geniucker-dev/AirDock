@@ -21,3 +21,4 @@ pub mod session;
 
 pub mod status;
 pub mod telemetry;
+pub mod update;

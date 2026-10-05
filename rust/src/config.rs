@@ -27,6 +27,9 @@ pub struct Settings {
     pub window_width: u32,
     pub window_height: u32,
     pub hls_enabled: bool,
+    pub automatic_updates: bool,
+    pub update_mirrors_enabled: bool,
+    pub update_mirrors: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,6 +89,9 @@ impl Default for Settings {
             window_width: 1120,
             window_height: 760,
             hls_enabled: false,
+            automatic_updates: true,
+            update_mirrors_enabled: true,
+            update_mirrors: vec![crate::update::DEFAULT_MIRROR.into()],
         }
     }
 }
@@ -107,6 +113,14 @@ impl Settings {
         }
         if self.schema_version != 1 {
             bail!("Unsupported settings schema version")
+        }
+        anyhow::ensure!(
+            self.update_mirrors.len() <= 4,
+            "At most four update mirrors are supported"
+        );
+        for mirror in &self.update_mirrors {
+            anyhow::ensure!(mirror.len() <= 2048, "Update mirror URL too long");
+            crate::update::validate_mirror(mirror)?;
         }
         Ok(())
     }

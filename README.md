@@ -62,6 +62,29 @@ with field validation and explicit unsaved/saved feedback.
 New video sessions automatically show a hidden/minimized player. Audio-only
 connections remain in the tray. Hiding an ongoing session is respected until a
 new connection; FLUSH and format changes do not repeatedly reopen the window.
+When a player was opened automatically from the tray, ending its video session
+returns it to the tray after a short reconnect grace period. Fullscreen preference
+is retained. Explicitly restoring the window, leaving fullscreen or opening
+settings keeps the window open instead. Audio/control connections may remain
+active after video has ended.
+
+## Updates
+
+Windows installer and portable builds can update themselves from GitHub's latest
+**stable** release. Background checks run daily; downloading/installing requires
+confirmation. The program keeps receiving during downloads, then shuts down
+gracefully for installation and restarts, preserving settings and pairing keys.
+Updates can also be checked manually from Settings or the tray menu.
+
+Downloads try GitHub directly first. On failure, enabled HTTPS mirrors are probed
+and tried in speed order; `https://gh-proxy.com` is the default. Mirror prefixes
+are configurable in Settings. SHA-256 and download size must match the official
+GitHub release metadata; metadata is never accepted from a mirror. Checks fail
+clearly if GitHub metadata is unavailable, and prereleases/downgrades are ignored.
+An independent update helper runs without FFmpeg. Portable updates verify every
+payload file and replace only manifest-owned application files, with rollback on
+replacement failure; unrelated user files are preserved. Installer updates target
+the existing installation directory. Update installation currently supports Windows.
 
 ## Build, verification and delivery
 

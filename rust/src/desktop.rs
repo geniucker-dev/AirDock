@@ -25,9 +25,12 @@ use std::{
 };
 mod appearance;
 mod form;
+mod lifecycle;
+mod updates;
 mod view;
 use appearance::desktop_theme;
 use form::Form;
+use lifecycle::ConnectionReveal;
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about = "AirDock — AirPlay receiver for your desktop")]
@@ -224,6 +227,17 @@ enum Message {
     SettingsSaved(Result<Settings, String>),
     AudioSaved(Result<Settings, String>),
     PreferencesSaved(WindowPreferences, Result<Settings, String>),
+    UpdateCheck,
+    UpdateOpen,
+    UpdateChecked(u64, Option<Result<Option<crate::update::Release>, String>>),
+    UpdateDownload,
+    UpdateConfirm,
+    UpdateCancel,
+    UpdateDownloaded(u64, Option<Result<crate::update::Downloaded, String>>),
+    UpdatePrepared(u64, Result<(), String>),
+    AutomaticUpdates(bool),
+    UpdateMirrorsEnabled(bool),
+    UpdateMirrors(String),
     Pointer,
     ControlsHovered(bool),
     Mute,
@@ -321,28 +335,6 @@ fn tray_events(events: &TrayEvents) -> impl futures::Stream<Item = Message> + us
         .expect("tray events start once")
         .map(Message::Tray)
 }
-/// One reveal per receiving session, not per media generation (FLUSH/seek).
-#[derive(Default)]
-struct ConnectionReveal {
-    seen: Option<u64>,
-}
-impl ConnectionReveal {
-    fn video(&mut self, session: Option<u64>, has_frame: bool, hidden: bool) -> bool {
-        let Some(session) = session.filter(|_| has_frame) else {
-            return false;
-        };
-        if self.seen == Some(session) {
-            return false;
-        }
-        self.seen = Some(session);
-        hidden
-    }
-    fn dismiss(&mut self, session: Option<u64>) {
-        if session.is_some() {
-            self.seen = session;
-        }
-    }
-}
 struct App {
     client: Client,
     form: Form,
@@ -362,6 +354,8 @@ struct App {
     args: Arguments,
     status: UiState,
     frame: Option<Arc<VideoFrame>>,
+    video_serial: u64,
+    video_started: Instant,
     events: FrameEvents,
     status_events: FrameEvents,
     window: Option<window::Id>,
@@ -374,6 +368,7 @@ struct App {
     minimized: bool,
     close_minimized: bool,
     connection_reveal: ConnectionReveal,
+    updates: crate::update::State,
     gpu_warning: bool,
 
     devices: Vec<crate::audio::DeviceChoice>,
@@ -416,6 +411,8 @@ impl App {
             status_events: FrameEvents(Arc::new(Mutex::new(Some(status_receiver))), true),
             status: UiState::default(),
             frame: None,
+            video_serial: 0,
+            video_started: Instant::now(),
             window: None,
             viewport: iced::Size::new(settings.window_width as f32, settings.window_height as f32),
             page: 0,
@@ -426,6 +423,7 @@ impl App {
             minimized: false,
             close_minimized: false,
             connection_reveal: ConnectionReveal::default(),
+            updates: crate::update::State::new(&directory),
             gpu_warning: false,
             form: Form::new(settings.clone()),
             preferences: WindowPreferences::from_settings(&settings),
@@ -639,6 +637,23 @@ impl App {
                 .store(0, Ordering::Relaxed);
         }
         let epoch = self.client.shared.generation();
+        let serial = self
+            .client
+            .shared
+            .sessions
+            .video_serial
+            .load(Ordering::Acquire);
+        if self.video_serial != serial {
+            self.video_started = *self.client.shared.sessions.video_started.lock().unwrap();
+            self.video_serial = serial;
+        }
+        let active = self
+            .client
+            .shared
+            .sessions
+            .video_owner
+            .load(Ordering::Acquire)
+            != 0;
         self.frame = self
             .client
             .shared
@@ -648,7 +663,7 @@ impl App {
             .lock()
             .unwrap()
             .as_ref()
-            .filter(|f| f.epoch == epoch)
+            .filter(|f| active && f.epoch == epoch && f.received >= self.video_started)
             .cloned();
         if !Arc::ptr_eq(&self.status.cover, &self.cover_source) {
             self.cover_source = self.status.cover.clone();
@@ -656,31 +671,51 @@ impl App {
                 .then(|| widget::image::Handle::from_bytes((*self.cover_source).clone()));
         }
     }
-    fn active_session(&self) -> Option<u64> {
-        self.client
+    fn active_presentation_token(&self) -> Option<u64> {
+        (self
+            .client
             .shared
             .sessions
-            .owner
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|s| s.id)
+            .video_owner
+            .load(Ordering::Acquire)
+            != 0)
+            .then(|| {
+                self.client
+                    .shared
+                    .sessions
+                    .video_serial
+                    .load(Ordering::Acquire)
+            })
     }
     fn active_video_session(&self) -> Option<u64> {
-        let owner = self.client.shared.sessions.owner.lock().unwrap();
-        self.frame
-            .as_ref()
-            .filter(|f| f.epoch == self.client.shared.generation())
-            .and_then(|_| owner.as_ref().map(|s| s.id))
+        self.active_presentation_token()
+            .filter(|serial| *serial == self.video_serial && self.frame.is_some())
     }
     fn reveal_video(&mut self) -> Option<Task<Message>> {
+        let session = self.active_video_session();
         if self.connection_reveal.video(
-            self.active_video_session(),
+            session,
             self.frame.is_some(),
             self.window.is_none() || self.minimized,
         ) {
+            if self.window.is_none() && self.tray_available() {
+                self.connection_reveal.automatically_opened(session);
+            }
             self.page = 0;
             return Some(self.open_window());
+        }
+        None
+    }
+    fn return_automatic_window(&mut self) -> Option<Task<Message>> {
+        if !self.tray_available() || !self.connection_reveal.is_automatic() {
+            return None;
+        }
+        let session = self.active_presentation_token();
+        if self
+            .connection_reveal
+            .return_to_tray(session, Instant::now())
+        {
+            return Some(self.update(Message::Hide));
         }
         None
     }
@@ -734,6 +769,9 @@ impl App {
                 | Message::CloseTray(_)
                 | Message::Autostart(_)
                 | Message::StartHidden(_)
+                | Message::AutomaticUpdates(_)
+                | Message::UpdateMirrorsEnabled(_)
+                | Message::UpdateMirrors(_)
         ) {
             self.form.changed();
         }
@@ -753,6 +791,11 @@ impl App {
                 if let Some(task) = self.reveal_video() {
                     return task;
                 }
+                if !matches!(message, Message::Frame)
+                    && let Some(task) = self.return_automatic_window()
+                {
+                    return task;
+                }
             }
             Message::Tick => {
                 if crate::platform::exit_requested()
@@ -770,6 +813,7 @@ impl App {
 
                 if self.directory.join("restore-window").exists() {
                     let _ = std::fs::remove_file(self.directory.join("restore-window"));
+                    self.connection_reveal.keep_open();
                     return self.open_window();
                 }
                 let gpu = render::compositor::STATUS.load(Ordering::Acquire);
@@ -822,12 +866,19 @@ impl App {
                 if let Some(task) = self.reveal_video() {
                     return task;
                 }
+                if let Some(task) = self.return_automatic_window() {
+                    return task;
+                }
                 if self
                     .preferences_dirty
                     .is_some_and(|t| t.elapsed() >= Duration::from_millis(500))
                     && !self.preferences_pending
                 {
                     return self.save_preferences();
+                }
+                if !self.args.audio_null && self.form.saved.automatic_updates && self.updates.due()
+                {
+                    return self.check_updates();
                 }
                 if let Some(id) = self.window {
                     return window::is_minimized(id)
@@ -838,7 +889,7 @@ impl App {
                 if self.window != Some(id) {
                     return Task::none();
                 }
-                let session = self.active_session();
+                let session = self.active_presentation_token();
                 self.controls_visible = false;
                 self.controls_hovered = false;
                 self.connection_reveal.dismiss(session);
@@ -925,8 +976,10 @@ impl App {
                 }
                 if self.minimized != minimized {
                     if minimized {
-                        let session = self.active_session();
+                        let session = self.active_presentation_token();
                         self.connection_reveal.dismiss(session);
+                    } else {
+                        self.connection_reveal.keep_open();
                     }
                     self.client
                         .shared
@@ -956,6 +1009,7 @@ impl App {
                 }
             }
             Message::Page(page) => {
+                self.connection_reveal.keep_open();
                 self.page = page;
                 self.client.shared.media.display.visible.store(
                     page == 0 && self.window.is_some() && !self.minimized && !self.gpu_warning,
@@ -980,6 +1034,9 @@ impl App {
             },
             Message::Fullscreen => {
                 self.fullscreen = !self.fullscreen;
+                if !self.fullscreen {
+                    self.connection_reveal.keep_open();
+                }
                 self.window_mode_revision += 1;
                 self.preferences.fullscreen = self.fullscreen;
                 self.preferences_dirty = Some(Instant::now());
@@ -1006,6 +1063,9 @@ impl App {
             Message::Crop => self.crop = !self.crop,
             Message::Focus => {
                 self.focus = !self.focus;
+                if !self.focus {
+                    self.connection_reveal.keep_open();
+                }
                 self.preferences.hide_ui = self.focus;
                 self.preferences_dirty = Some(Instant::now());
                 self.controls_visible = false;
@@ -1031,6 +1091,10 @@ impl App {
                 }
             }
             Message::Escape => {
+                if self.updates.confirm {
+                    self.updates.confirm = false;
+                    return Task::none();
+                }
                 if self.fullscreen {
                     return Task::done(Message::Fullscreen);
                 }
@@ -1042,7 +1106,7 @@ impl App {
                 if self.tray_available() {
                     self.controls_visible = false;
                     self.controls_hovered = false;
-                    let session = self.active_session();
+                    let session = self.active_presentation_token();
                     self.connection_reveal.dismiss(session);
                     self.client
                         .shared
@@ -1062,6 +1126,7 @@ impl App {
             }
 
             Message::Quit => {
+                self.updates.cancel();
                 self.quit_requested = true;
                 if self.preferences_pending {
                     return Task::none();
@@ -1105,6 +1170,77 @@ impl App {
                             .shared
                             .report(format!("Could not disconnect: {e}"))
                     });
+            }
+            Message::UpdateCheck => return self.check_updates(),
+            Message::UpdateOpen => return self.show_updates(),
+            Message::UpdateChecked(operation, result) => {
+                if operation == self.updates.operation
+                    && let Some(result) = result
+                {
+                    self.updates.status = match result {
+                        Ok(release) => {
+                            self.updates.checked();
+                            release
+                                .map(crate::update::Status::Available)
+                                .unwrap_or(crate::update::Status::Current)
+                        }
+                        Err(error) => crate::update::Status::Failed(error),
+                    };
+                }
+            }
+            Message::UpdateDownload => {
+                if !crate::update::INSTALL_SUPPORTED {
+                    if let crate::update::Status::Available(release) = &self.updates.status {
+                        let page = release.page.clone();
+                        if let Err(error) = crate::platform::open(&page) {
+                            self.updates.status =
+                                crate::update::Status::Failed(format!("{error:#}"));
+                        }
+                    }
+                } else {
+                    self.updates.confirm = true;
+                }
+            }
+            Message::UpdateConfirm => return self.download_update(),
+            Message::UpdateCancel => {
+                self.updates.confirm = false;
+                if let crate::update::Status::Downloading(release) = self.updates.status.clone() {
+                    self.updates.cancel();
+                    self.updates.status = crate::update::Status::Available(release);
+                }
+            }
+            Message::UpdateDownloaded(operation, result) => {
+                if operation == self.updates.operation
+                    && let Some(result) = result
+                {
+                    self.updates.abort = None;
+                    match result {
+                        Ok(download) => {
+                            self.updates.status = crate::update::Status::Ready(download);
+                            return self.install_update();
+                        }
+                        Err(error) => self.updates.status = crate::update::Status::Failed(error),
+                    }
+                }
+            }
+            Message::UpdatePrepared(operation, result) => {
+                if operation == self.updates.operation {
+                    match result {
+                        Ok(()) => return self.update(Message::Quit),
+                        Err(error) => self.updates.status = crate::update::Status::Failed(error),
+                    }
+                }
+            }
+            Message::AutomaticUpdates(value) => self.form.draft.automatic_updates = value,
+            Message::UpdateMirrorsEnabled(value) => self.form.draft.update_mirrors_enabled = value,
+            Message::UpdateMirrors(value) => {
+                self.form.update_mirrors = value.clone();
+                self.form.draft.update_mirrors = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect()
             }
             Message::ClearError => self.client.shared.ui.lock().unwrap().error.clear(),
             Message::Save => {
@@ -1279,8 +1415,12 @@ impl App {
             #[cfg(windows)]
             Message::Tray(command) => {
                 return Task::done(match command {
-                    crate::platform::tray::Command::Show => return self.open_window(),
+                    crate::platform::tray::Command::Show => {
+                        self.connection_reveal.keep_open();
+                        return self.open_window();
+                    }
                     crate::platform::tray::Command::Hide => Message::Hide,
+                    crate::platform::tray::Command::Updates => Message::UpdateOpen,
                     crate::platform::tray::Command::Disconnect => Message::Disconnect,
                     crate::platform::tray::Command::Quit => Message::Quit,
                 });
