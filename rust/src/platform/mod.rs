@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use anyhow::Result;
 use std::path::Path;
+pub(crate) mod power;
 
 pub fn attach_parent_console() {
     #[cfg(windows)]

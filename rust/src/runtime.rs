@@ -57,6 +57,9 @@ impl Runtime {
         let worker = thread::Builder::new()
             .name("receiver-runtime".into())
             .spawn(move || {
+                // Windows execution state belongs to this thread, never to the window.
+                let mut inhibitor: platform::power::Inhibitor = Default::default();
+                let mut last_power_error = None;
                 let mut discovery = match Discovery::start(server.device()) {
                     Ok(d) => Some(d),
                     Err(e) => {
@@ -149,6 +152,25 @@ impl Runtime {
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
                     }
+                    let inhibit = state
+                        .sessions
+                        .needs_video_inhibition(|| server.device().hls.is_playing());
+                    match inhibitor.update(inhibit) {
+                        Ok(()) => last_power_error = None,
+                        Err(error) => {
+                            if last_power_error.is_none_or(|at: std::time::Instant| {
+                                at.elapsed() >= Duration::from_secs(30)
+                            }) {
+                                state
+                                    .report(format!("Windows playback idle protection: {error:#}"));
+                                last_power_error = Some(std::time::Instant::now());
+                            }
+                        }
+                    }
+                    state
+                        .sessions
+                        .idle_inhibited
+                        .store(inhibitor.active(), Ordering::Release);
                     if last_devices.elapsed() >= Duration::from_secs(2) {
                         let addresses = if_addrs::get_if_addrs()
                             .unwrap_or_default()
@@ -170,6 +192,11 @@ impl Runtime {
                 }
                 state.running.store(false, Ordering::Release);
                 state.request_disconnect();
+                drop(inhibitor);
+                state
+                    .sessions
+                    .idle_inhibited
+                    .store(false, Ordering::Release);
                 drop(discovery);
                 drop(server);
                 state.media.stop();
@@ -196,6 +223,48 @@ impl Drop for Runtime {
 mod tests {
     use super::*;
     use futures::channel::oneshot;
+    #[cfg(windows)]
+    #[test]
+    fn hidden_receiver_inhibits_video_and_releases_after_disconnect_and_quit() {
+        let directory = std::env::temp_dir().join(format!(
+            "airdock-power-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut runtime = Runtime::start(directory.clone(), 0, Settings::default()).unwrap();
+        let shared = &runtime.client.shared;
+        let wait = |active| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while shared.sessions.idle_inhibited.load(Ordering::Acquire) != active {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Runtime power transition timed out"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        assert!(!shared.sessions.idle_inhibited.load(Ordering::Acquire));
+        shared.ui.visible.store(false, Ordering::Release);
+        shared.sessions.begin_video(1);
+        wait(true);
+        shared.sessions.advance();
+        shared.sessions.begin_video(2);
+        shared.sessions.end_video(1);
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(shared.sessions.idle_inhibited.load(Ordering::Acquire));
+        shared.sessions.end_video(2);
+        wait(false);
+        shared.sessions.begin_video(3);
+        wait(true);
+        let shared = shared.clone();
+        runtime.stop();
+        assert!(!shared.sessions.idle_inhibited.load(Ordering::Acquire));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
     fn request(
         runtime: &Runtime,
         command: impl FnOnce(oneshot::Sender<Result<Settings, String>>) -> Command,

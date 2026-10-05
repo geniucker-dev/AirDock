@@ -330,7 +330,7 @@ impl Session {
                 }else{let body=String::from_utf8_lossy(&req.body);(body.lines().find_map(|s|s.strip_prefix("Content-Location:")).context("Missing playback URL")?.trim().into(),0.)};
                 self.device.hls.play(req.header("x-apple-session-id"),&url,position)?;
                 self.device.shared.sessions.end_video(self.id);
-                self.device.shared.sessions.begin_video(self.id);
+                self.device.shared.sessions.begin_hls_video(self.id);
                 {let mut ui=self.device.shared.ui.lock().unwrap();ui.peer=self.peer.ip().to_string();ui.kind="HLS playback".into();}
                 return Ok(Response::ok());
             },

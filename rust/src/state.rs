@@ -95,6 +95,8 @@ impl Shared {
             .collect::<Vec<_>>();
         intervals.sort_unstable();
         serde_json::json!({"elapsed_seconds":self.started.elapsed().as_secs_f64(),
+            "idle_inhibition_supported":cfg!(windows),
+            "idle_inhibition_active":self.sessions.idle_inhibited.load(Ordering::Acquire),
             "decoded_frames":m.decoded.load(Ordering::Relaxed),
             "receiver_view_builds":m.receiver_view_builds.load(Ordering::Relaxed),"ui_frame_events":m.ui_frame_events.load(Ordering::Relaxed),
             "render_adapter":crate::render::compositor::ADAPTER_NAME.lock().unwrap().clone(),"presented_frames":m.presented.load(Ordering::Relaxed),

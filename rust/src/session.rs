@@ -19,6 +19,8 @@ pub struct Sessions {
     pub disconnect: AtomicU64,
     /// Protocol video lifetime, independent of FLUSH/seek frame generations.
     pub video_owner: AtomicU64,
+    pub video_hls: AtomicBool,
+    pub idle_inhibited: AtomicBool,
     pub video_serial: AtomicU64,
     pub video_started: Mutex<std::time::Instant>,
     pub epoch: Arc<AtomicU64>,
@@ -30,6 +32,8 @@ impl Default for Sessions {
             running: AtomicBool::new(true),
             disconnect: AtomicU64::new(0),
             video_owner: AtomicU64::new(0),
+            video_hls: AtomicBool::new(false),
+            idle_inhibited: AtomicBool::new(false),
             video_serial: AtomicU64::new(0),
             video_started: Mutex::new(std::time::Instant::now()),
             epoch: Arc::new(AtomicU64::new(1)),
@@ -49,12 +53,26 @@ impl Sessions {
             .compare_exchange(session, 0, Ordering::AcqRel, Ordering::Acquire);
     }
     pub fn begin_video(&self, session: u64) {
-        if self.video_owner.load(Ordering::Acquire) == session {
+        self.begin_presentation(session, false);
+    }
+    pub fn begin_hls_video(&self, session: u64) {
+        self.begin_presentation(session, true);
+    }
+    fn begin_presentation(&self, session: u64, hls: bool) {
+        if self.video_owner.load(Ordering::Acquire) == session
+            && self.video_hls.load(Ordering::Acquire) == hls
+        {
             return; // Repeated SETUP/format change in the same live presentation.
         }
         *self.video_started.lock().unwrap() = std::time::Instant::now();
         self.video_serial.fetch_add(1, Ordering::AcqRel);
+        self.video_hls.store(hls, Ordering::Release);
         self.video_owner.store(session, Ordering::Release);
+    }
+    /// Window visibility and frame FLUSH do not end an active mirror session.
+    pub fn needs_video_inhibition(&self, hls_playing: impl FnOnce() -> bool) -> bool {
+        self.video_owner.load(Ordering::Acquire) != 0
+            && (!self.video_hls.load(Ordering::Acquire) || hls_playing())
     }
 }
 
@@ -75,5 +93,24 @@ mod tests {
         assert_eq!(sessions.video_owner.load(Ordering::Acquire), 0);
         sessions.begin_video(2);
         assert!(sessions.video_serial.load(Ordering::Acquire) > serial);
+    }
+    #[test]
+    fn idle_inhibition_follows_video_not_control_or_frame_generations() {
+        let sessions = Sessions::default();
+        assert!(!sessions.needs_video_inhibition(|| true));
+        sessions.begin_video(1);
+        assert!(sessions.needs_video_inhibition(|| panic!("Mirror must not consult HLS")));
+        sessions.advance(); // Audio FLUSH/seek must not release mirror protection.
+        assert!(sessions.needs_video_inhibition(|| false));
+        sessions.begin_video(2);
+        sessions.end_video(1);
+        assert!(sessions.needs_video_inhibition(|| false));
+        sessions.end_video(2);
+        assert!(!sessions.needs_video_inhibition(|| true));
+        sessions.begin_hls_video(2);
+        assert!(sessions.needs_video_inhibition(|| true));
+        assert!(!sessions.needs_video_inhibition(|| false)); // Pause, EOF or failure.
+        sessions.begin_video(2); // Same control connection switches back to mirror.
+        assert!(sessions.needs_video_inhibition(|| false));
     }
 }

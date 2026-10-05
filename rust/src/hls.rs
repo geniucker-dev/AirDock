@@ -185,6 +185,18 @@ impl Hls {
         *self.player.lock().unwrap() = Some((stop, worker));
         Ok(())
     }
+    pub fn is_playing(&self) -> bool {
+        let playing = self.inner.session.lock().unwrap().1.rate > 0.;
+        playing
+            && self
+                .player
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|(stop, worker)| {
+                    !stop.load(Ordering::Acquire) && !worker.is_finished()
+                })
+    }
     pub fn stop(&self) {
         {
             let mut s = self.inner.session.lock().unwrap();

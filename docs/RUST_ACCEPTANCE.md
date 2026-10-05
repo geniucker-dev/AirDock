@@ -18,6 +18,9 @@
   decoder/demuxer/protocol availability, recursive normal/delayed PE imports,
   hashes, corresponding patched FFmpeg source and build materials.
 - Playback tests using only the packaged DLL directory and Windows system paths.
+- Video-session idle protection policy, FLUSH/reconnect isolation, transition-only
+  power requests, rejected-request retry and RAII restoration. Windows unit tests
+  exercise actual thread execution flags and restoration of prior thread state.
 
 CI uses deterministic null audio where explicitly configured. It verifies decoded
 PCM and callback logic, not physical WASAPI output, hotplug or audible synchronization.
@@ -51,6 +54,11 @@ reconnects/orientation/FLUSH, inject loss/jitter, pause/seek HLS, switch and unp
 speakers/default devices, move between DPI scales, hide/restore the tray and force
 a GPU reset. Window close/minimize must keep receiving; Quit must release sockets,
 workers, CPAL streams and GPU resources. Check Windows autostart and Unicode paths.
+Set short display/sleep idle timeouts on a physical Windows machine and verify
+mirroring and HLS keep the display/system awake in windowed/fullscreen/tray modes,
+then permit idle after video teardown, HLS pause/end or Quit. Audio-only must not
+hold the display awake. Check manual Win+L still works. Screensaver/mandatory lock
+policies are not bypassed; native API assertions do not prove physical idle behavior.
 
 These physical gates stay **pending** until measured. CI packages are experimental
 until functionality and reference performance comparisons pass. Use
