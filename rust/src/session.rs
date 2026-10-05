@@ -64,6 +64,22 @@ impl Sessions {
     pub fn active_protocol(&self) -> Option<ProtocolId> {
         self.owner.lock().unwrap().as_ref().map(|o| o.protocol)
     }
+    /// Serialize auxiliary playback controls with ownership handover. The closure
+    /// must not claim/release/cancel a session or otherwise re-enter this gate.
+    pub fn with_protocol_control<R>(
+        &self,
+        protocol: ProtocolId,
+        apply: impl FnOnce() -> R,
+    ) -> Option<R> {
+        let owner = self.owner.lock().unwrap();
+        if owner
+            .as_ref()
+            .is_some_and(|owner| owner.protocol != protocol)
+        {
+            return None;
+        }
+        Some(apply())
+    }
     /// At most one sender owns the shared playback devices. A protocol decides
     /// whether a same-peer reconnect may retire its own previous connection.
     pub fn claim(
@@ -190,6 +206,59 @@ mod tests {
             policy,
             Duration::from_millis(50),
         )
+    }
+    #[test]
+    fn auxiliary_controls_and_new_protocol_claims_cannot_cross_in_flight() {
+        use std::sync::mpsc;
+        let sessions = Arc::new(Sessions::default());
+        let (entered, ready) = mpsc::channel();
+        let (release, continue_control) = mpsc::channel();
+        let control_sessions = sessions.clone();
+        let control = std::thread::spawn(move || {
+            control_sessions
+                .with_protocol_control(ProtocolId::AIRPLAY, || {
+                    entered.send(()).unwrap();
+                    continue_control
+                        .recv_timeout(Duration::from_secs(2))
+                        .unwrap();
+                })
+                .unwrap();
+        });
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        let claim_sessions = sessions.clone();
+        let (started, attempting) = mpsc::channel();
+        let (granted, result) = mpsc::channel();
+        let claimant = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            granted
+                .send(claim(
+                    &claim_sessions,
+                    ProtocolId("test-cast"),
+                    "127.0.0.1".parse().unwrap(),
+                    ReconnectPolicy::Reject,
+                ))
+                .unwrap();
+        });
+        attempting.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(
+            result.recv_timeout(Duration::from_millis(20)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        release.send(()).unwrap();
+        control.join().unwrap();
+        let lease = result
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        claimant.join().unwrap();
+        assert!(
+            sessions
+                .with_protocol_control(ProtocolId::AIRPLAY, || panic!(
+                    "Foreign playback must not be changed"
+                ))
+                .is_none()
+        );
+        sessions.release(&lease, || {});
     }
     #[test]
     fn protocols_share_ownership_but_cannot_steal_each_others_same_peer() {

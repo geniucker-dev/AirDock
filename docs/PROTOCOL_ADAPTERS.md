@@ -44,7 +44,8 @@ remain protocol-specific; they are not interfaces another adapter should reuse.
 The listener's own cancellation flag allows stopping this adapter without setting
 the whole receiver's running flag. Discovery is withdrawn before listener and
 session teardown. Auxiliary AirPlay controls cannot pause another protocol's
-playback.
+playback. Auxiliary control checks and mutations run under the ownership gate,
+so another adapter cannot claim the output in between.
 
 `session::Sessions` allocates IDs across all adapters and arbitrates one active
 sender for the shared audio/video outputs. Wire IDs are adapter-local metadata.

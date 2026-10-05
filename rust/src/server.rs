@@ -309,27 +309,31 @@ impl Session {
     fn route(&mut self, req: &Request) -> Result<Response> {
         let path = req.path();
         let method = req.method.as_str();
-        // Auxiliary AirPlay control connections may exist without a media lease.
-        // They must not pause/reset playback owned by another protocol.
-        if self
-            .device
-            .shared
-            .sessions
-            .active_protocol()
-            .is_some_and(|p| p != ProtocolId::AIRPLAY)
-            && matches!(
-                (method, path),
-                (
-                    "POST",
-                    "/audioMode" | "/action" | "/stop" | "/rate" | "/scrub" | "/setProperty"
-                )
-            )
-        {
-            return Ok(Response {
-                status: 503,
-                ..Response::ok()
-            });
+        // Hold the session gate through auxiliary playback controls: a new
+        // protocol cannot acquire ownership between the check and the mutation.
+        if matches!(
+            (method, path),
+            (
+                "POST",
+                "/audioMode" | "/action" | "/stop" | "/rate" | "/scrub"
+            ) | ("POST" | "PUT", "/setProperty")
+        ) {
+            let shared = self.device.shared.clone();
+            return shared
+                .sessions
+                .with_protocol_control(ProtocolId::AIRPLAY, || self.route_request(req))
+                .unwrap_or_else(|| {
+                    Ok(Response {
+                        status: 503,
+                        ..Response::ok()
+                    })
+                });
         }
+        self.route_request(req)
+    }
+    fn route_request(&mut self, req: &Request) -> Result<Response> {
+        let path = req.path();
+        let method = req.method.as_str();
         match (method,path) {
             ("OPTIONS",_)=>return Ok(Response::ok().header("Public","ANNOUNCE, SETUP, RECORD, PAUSE, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, POST, GET")),
             ("GET","/info")=>return Response::ok().plist(self.device.info()),
