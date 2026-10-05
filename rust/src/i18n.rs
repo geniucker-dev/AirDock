@@ -50,6 +50,34 @@ impl Language {
         Some(match text {
             "Unsupported settings schema version" => "不支持此设置格式版本",
             "Receive" => "接收",
+            "Updates" => "更新",
+            "Check for updates" => "检查更新",
+            "Install update?" => "安装更新？",
+            "After downloading, AirDock will stop receiving, install the update and restart. Your configuration will be preserved." => {
+                "下载完成后，AirDock 将停止接收、安装更新并重新启动。配置会保留。"
+            }
+            "Download and install" => "下载并安装",
+            "Cancel" => "取消",
+            "An AirDock update is available." => "AirDock 有新版本可用。",
+            "View update" => "查看更新",
+            "Open release page" => "打开发行页面",
+            "Updates have not been checked yet." => "尚未检查更新。",
+            "Checking for updates…" => "正在检查更新…",
+            "AirDock is up to date." => "AirDock 已是最新版本。",
+            "Update available" => "有新版本",
+            "Downloading update" => "正在下载更新",
+            "Update downloaded and verified." => "更新已下载并通过校验。",
+            "Update failed" => "更新失败",
+            "Preparing update…" => "正在准备更新…",
+            "Stable releases from GitHub. Installation always requires your confirmation." => {
+                "从 GitHub 获取正式版本，安装前始终需要确认。"
+            }
+            "Current version" => "当前版本",
+            "Check daily in the background" => "每天在后台检查更新",
+            "Use mirrors if GitHub download fails" => "GitHub 下载失败时使用镜像",
+            "Comma-separated HTTPS mirror prefixes. Failed direct downloads try the fastest reachable mirror. Official GitHub SHA-256 must match." => {
+                "多个 HTTPS 镜像前缀用逗号分隔。直连失败后尝试最快的可用镜像，文件必须通过 GitHub 官方 SHA-256 校验。"
+            }
             "Settings" => "设置",
             "Ready" => "就绪",
             "Audio" => "音频",

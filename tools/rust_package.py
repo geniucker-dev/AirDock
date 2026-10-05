@@ -20,7 +20,10 @@ def build_package(binary,native,crt,destination):
     if destination.exists():shutil.rmtree(destination)
     destination.mkdir(parents=True)
     shutil.copy2(binary,destination/binary.name)
-    roots=[native,crt];pending=[destination/binary.name];seen=set()
+    updater=binary.with_name('airdock-updater.exe')
+    assert updater.is_file(),'Update helper missing from build'
+    shutil.copy2(updater,destination/updater.name)
+    roots=[native,crt];pending=[destination/binary.name,destination/updater.name];seen=set()
     system=pathlib.Path(os.environ['SystemRoot'])/'System32'
     while pending:
         path=pending.pop()
@@ -34,12 +37,32 @@ def build_package(binary,native,crt,destination):
                 shutil.copy2(source,destination/source.name);pending.append(destination/source.name)
             else:
                 assert lower.startswith(('api-ms-win-','ext-ms-win-')) or (system/name).exists(),f'Unresolved dependency: {name}'
+    helper_files={updater.name};pending=[destination/updater.name]
+    while pending:
+        for name in imports(pending.pop()):
+            assert not any(name.lower().startswith(lib) for lib in LIBRARIES),'Update helper must not import FFmpeg'
+            source=next((p for p in destination.iterdir() if p.name.lower()==name.lower()),None)
+            if source is not None and source.name not in helper_files:
+                helper_files.add(source.name);pending.append(source)
+    (destination/'UPDATER_RUNTIME.json').write_text(json.dumps(sorted(helper_files)))
     return seen
 
 def audit(directory):
     assert sys.platform=='win32','DLL audit must execute on Windows'
     directory=directory.resolve()
     branding = audit_pe(directory/'airdock.exe', application=True)
+    audit_pe(directory/'airdock-updater.exe')
+    updater_runtime=json.loads((directory/'UPDATER_RUNTIME.json').read_text())
+    assert 'airdock-updater.exe' in updater_runtime
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='airdock-helper-') as helper:
+        helper=pathlib.Path(helper)
+        for name in updater_runtime:
+            assert pathlib.Path(name).name==name
+            shutil.copy2(directory/name,helper/name)
+        expected='AirDock updater '+__import__('tomllib').loads((pathlib.Path(__file__).resolve().parents[1]/'Cargo.toml').read_text())['package']['version']
+        result=subprocess.check_output([str(helper/'airdock-updater.exe'),'--version'],env={**os.environ,'PATH':str(pathlib.Path(os.environ['SystemRoot'])/'System32')},text=True,timeout=10).strip()
+        assert result==expected,result
     assert all(not FORBIDDEN.search(p.name) for p in directory.glob('*.dll')),'Forbidden DLL in package'
     # LoadLibrary search includes this directory and Windows system DLLs, not the build PATH.
     os.environ['PATH']=str(directory)+os.pathsep+str(pathlib.Path(os.environ['SystemRoot'])/'System32')

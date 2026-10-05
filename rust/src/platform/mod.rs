@@ -143,6 +143,7 @@ pub mod tray {
         Show,
         Hide,
         Disconnect,
+        Updates,
         Quit,
     }
     pub struct Tray {
@@ -157,6 +158,7 @@ pub mod tray {
             for (title, command) in [
                 ("Show AirDock", Command::Show),
                 ("Hide to tray", Command::Hide),
+                ("Check for updates", Command::Updates),
                 ("Disconnect device", Command::Disconnect),
             ] {
                 let item = MenuItem::new(language.translate(title).as_ref(), true, None);
@@ -210,6 +212,7 @@ pub mod tray {
                     Command::Show => "Show AirDock",
                     Command::Hide => "Hide to tray",
                     Command::Disconnect => "Disconnect device",
+                    Command::Updates => "Check for updates",
                     Command::Quit => "Quit",
                 };
                 item.set_text(language.translate(label).as_ref());

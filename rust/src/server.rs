@@ -274,6 +274,7 @@ impl Session {
         self.legacy.clear();
         let mut owner = self.device.shared.owner.lock().unwrap();
         if owner.as_ref().is_some_and(|owner| owner.id == self.id) {
+            self.device.shared.sessions.end_video(self.id);
             *owner = None;
             {
                 let mut ui = self.device.shared.ui.lock().unwrap();
@@ -328,11 +329,19 @@ impl Session {
                     (string(d,"Content-Location").context("Missing playback URL")?.to_owned(),d.get("Start-Position-Seconds").and_then(Value::as_real).unwrap_or(0.))
                 }else{let body=String::from_utf8_lossy(&req.body);(body.lines().find_map(|s|s.strip_prefix("Content-Location:")).context("Missing playback URL")?.trim().into(),0.)};
                 self.device.hls.play(req.header("x-apple-session-id"),&url,position)?;
+                self.device.shared.sessions.end_video(self.id);
+                self.device.shared.sessions.begin_video(self.id);
                 {let mut ui=self.device.shared.ui.lock().unwrap();ui.peer=self.peer.ip().to_string();ui.kind="HLS playback".into();}
                 return Ok(Response::ok());
             },
             ("POST","/action")=>{self.device.hls.action(req.header("x-apple-session-id"),Value::from_reader(Cursor::new(&req.body))?)?;return Ok(Response::ok());},
-            ("POST","/stop")=>{self.device.hls.stop();return Ok(Response::ok());},
+            ("POST","/stop")=>{
+                let hls = self.device.shared.ui.lock().unwrap().kind == "HLS playback";
+                let owner = self.device.shared.sessions.video_owner.load(Ordering::Acquire);
+                self.device.hls.stop();
+                if hls { self.device.shared.sessions.end_video(owner); }
+                return Ok(Response::ok());
+            },
             ("POST","/rate")=>{if let Some(rate)=req.query("value").and_then(|v|v.parse::<f64>().ok()).filter(|v|v.is_finite()){self.device.hls.rate(rate)}return Ok(Response::ok());},
             ("POST","/scrub")=>{if let Some(position)=req.query("position").and_then(|v|v.parse::<f64>().ok()).filter(|p|p.is_finite()){self.device.hls.seek(position)}return Ok(Response::ok());},
             ("GET","/scrub")=>return Ok(Response::ok().bytes("text/parameters",format!("position: {}\r\n",self.device.hls.position()).into_bytes())),
@@ -392,7 +401,10 @@ impl Session {
                     for s in streams {
                         match s.as_dictionary().and_then(|d| integer(d, "type")) {
                             Some(96) => self.audio = None,
-                            Some(110) => self.mirror = None,
+                            Some(110) => {
+                                self.mirror = None;
+                                self.device.shared.sessions.end_video(self.id);
+                            }
                             _ => {}
                         }
                     }
@@ -554,6 +566,7 @@ impl Session {
                         )?;
                         self.mirror = Some(worker);
                         self.device.shared.ui.lock().unwrap().kind = "Screen mirroring".into();
+                        self.device.shared.sessions.begin_video(self.id);
                         dict([("type", uint(110)), ("dataPort", uint(port as u64))])
                     }
                     96 => {

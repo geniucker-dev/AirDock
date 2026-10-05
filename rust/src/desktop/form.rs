@@ -15,6 +15,7 @@ pub struct Form {
     pub width: String,
     pub height: String,
     pub fps: String,
+    pub update_mirrors: String,
     pub errors: Errors,
     pub feedback: String,
     pub audio_pending: bool,
@@ -27,6 +28,7 @@ impl Form {
             width: settings.mirror_width.to_string(),
             height: settings.mirror_height.to_string(),
             fps: settings.max_fps.to_string(),
+            update_mirrors: settings.update_mirrors.join(", "),
             draft: settings.clone(),
             saved: settings,
             errors: Errors::default(),
@@ -117,6 +119,7 @@ impl Form {
                     self.width = self.saved.mirror_width.to_string();
                     self.height = self.saved.mirror_height.to_string();
                     self.fps = self.saved.max_fps.to_string();
+                    self.update_mirrors = self.saved.update_mirrors.join(", ");
                     self.feedback = "Settings saved".into();
                 } else {
                     self.feedback = "Saved; newer edits are still unsaved".into();
@@ -133,6 +136,7 @@ impl Form {
         self.width = self.draft.mirror_width.to_string();
         self.height = self.draft.mirror_height.to_string();
         self.fps = self.draft.max_fps.to_string();
+        self.update_mirrors = self.draft.update_mirrors.join(", ");
         self.changed();
     }
 }

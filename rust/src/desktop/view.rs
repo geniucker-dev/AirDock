@@ -19,7 +19,35 @@ pub(super) struct Stats {
 }
 
 impl App {
-    pub(super) fn view(&self, _: window::Id) -> Element<'_, Message, Theme, Renderer> {
+    pub(super) fn view(&self, id: window::Id) -> Element<'_, Message, Theme, Renderer> {
+        let content = self.view_content(id);
+        if !self.updates.confirm {
+            return content;
+        }
+        let lang = self.language();
+        let panel = container(column![
+            text(lang, "Install update?").size(22).font(look::strong(lang)),
+            text(lang, "After downloading, AirDock will stop receiving, install the update and restart. Your configuration will be preserved.").size(14),
+            row![
+                button(text(lang, "Download and install").size(14)).padding([10,16]).style(look::primary).on_press(Message::UpdateConfirm),
+                button(text(lang, "Cancel").size(14)).padding([10,16]).style(look::secondary).on_press(Message::UpdateCancel)
+            ].spacing(12).align_y(iced::Alignment::Center)
+        ].spacing(20)).padding(28).max_width(540).style(look::panel);
+        widget::stack![
+            content,
+            widget::opaque(
+                container(panel)
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill)
+                    .style(|_| container::Style {
+                        background: Some(iced::Color::from_rgba(0., 0., 0., 0.45).into()),
+                        ..Default::default()
+                    })
+            )
+        ]
+        .into()
+    }
+    fn view_content(&self, _: window::Id) -> Element<'_, Message, Theme, Renderer> {
         let lang = self.language();
         if self.fullscreen || (self.focus && self.page == 0 && self.status.error.is_empty()) {
             let player = widget::mouse_area(
@@ -99,6 +127,32 @@ impl App {
             .width(Length::Fill);
         if !self.status.error.is_empty() {
             body = body.push(self.error_banner());
+        }
+        if matches!(
+            self.updates.status,
+            crate::update::Status::Available(_) | crate::update::Status::Failed(_)
+        ) {
+            body = body.push(
+                container(
+                    row![
+                        text(
+                            lang,
+                            if matches!(self.updates.status, crate::update::Status::Failed(_)) {
+                                "Update failed"
+                            } else {
+                                "An AirDock update is available."
+                            }
+                        )
+                        .size(12),
+                        widget::space().width(Length::Fill),
+                        button(text(lang, "View update").size(12))
+                            .style(look::secondary)
+                            .on_press(Message::UpdateOpen)
+                    ]
+                    .align_y(iced::Alignment::Center),
+                )
+                .padding([8, 24]),
+            );
         }
         body.into()
     }
@@ -559,7 +613,14 @@ impl App {
             .color(look::MUTED)
         ]
         .spacing(14);
-        let right = column![audio, widget::rule::horizontal(1), desktop].spacing(24);
+        let right = column![
+            audio,
+            widget::rule::horizontal(1),
+            desktop,
+            widget::rule::horizontal(1),
+            self.updates_view()
+        ]
+        .spacing(24);
         let fields: Element<'_, Message, Theme, Renderer> = if self.viewport.width >= 1050. {
             row![
                 container(receiver).width(Length::FillPortion(3)),
@@ -608,7 +669,7 @@ impl App {
                     .size(22)
                     .font(look::strong(lang))
             ],
-            scrollable(form).height(Length::Fill),
+            scrollable(form).id("settings-form").height(Length::Fill),
             text(
                 lang,
                 if f.feedback.is_empty() {
@@ -625,6 +686,89 @@ impl App {
         .height(Length::Fill)
         .width(Length::Fill)
         .into()
+    }
+    fn updates_view(&self) -> Element<'_, Message, Theme, Renderer> {
+        use crate::update::Status;
+        let lang = self.language();
+        let settings = &self.form.draft;
+        let label = match &self.updates.status {
+            Status::Idle => lang
+                .translate("Updates have not been checked yet.")
+                .into_owned(),
+            Status::Checking => lang.translate("Checking for updates…").into_owned(),
+            Status::Current => lang.translate("AirDock is up to date.").into_owned(),
+            Status::Available(release) => format!(
+                "{}: v{}",
+                lang.translate("Update available"),
+                release.version
+            ),
+            Status::Downloading(release) => {
+                let _ = release;
+                let total = self.updates.total_size;
+                let done = self
+                    .updates
+                    .progress
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                format!(
+                    "{}: {:.0}%",
+                    lang.translate("Downloading update"),
+                    done as f64 * 100. / total.max(1) as f64
+                )
+            }
+            Status::Ready(_) => lang
+                .translate("Update downloaded and verified.")
+                .into_owned(),
+            Status::Preparing => lang.translate("Preparing update…").into_owned(),
+            Status::Failed(error) => format!("{}: {error}", lang.translate("Update failed")),
+        };
+        let busy = matches!(
+            self.updates.status,
+            Status::Checking | Status::Downloading(_) | Status::Preparing
+        );
+        let mut buttons = row![
+            button(text(lang, "Check for updates").size(13))
+                .padding([9, 12])
+                .style(look::secondary)
+                .on_press_maybe((!busy).then_some(Message::UpdateCheck))
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center);
+        if matches!(self.updates.status, Status::Available(_) | Status::Ready(_)) {
+            buttons = buttons.push(
+                button(
+                    text(
+                        lang,
+                        if crate::update::INSTALL_SUPPORTED {
+                            "Download and install"
+                        } else {
+                            "Open release page"
+                        },
+                    )
+                    .size(13),
+                )
+                .padding([9, 12])
+                .style(look::primary)
+                .on_press(Message::UpdateDownload),
+            );
+        }
+        if matches!(self.updates.status, Status::Downloading(_)) {
+            buttons = buttons.push(
+                button(text(lang, "Cancel").size(13))
+                    .padding([9, 12])
+                    .style(look::secondary)
+                    .on_press(Message::UpdateCancel),
+            );
+        }
+        column![
+            section_title(lang, "Updates", "Stable releases from GitHub. Installation always requires your confirmation."),
+            text(lang, format!("{}: {}", lang.translate("Current version"), env!("CARGO_PKG_VERSION"))).size(12).color(look::MUTED),
+            checkbox(settings.automatic_updates).label(lang.translate("Check daily in the background").into_owned()).font(look::font(lang)).size(16).text_size(14).on_toggle(Message::AutomaticUpdates),
+            checkbox(settings.update_mirrors_enabled).label(lang.translate("Use mirrors if GitHub download fails").into_owned()).font(look::font(lang)).size(16).text_size(14).on_toggle(Message::UpdateMirrorsEnabled),
+            text_input("https://gh-proxy.com", &self.form.update_mirrors).font(look::font(lang)).size(13).padding([9,12]).style(look::input).on_input(Message::UpdateMirrors),
+            text(lang, "Comma-separated HTTPS mirror prefixes. Failed direct downloads try the fastest reachable mirror. Official GitHub SHA-256 must match.").size(12).color(look::MUTED),
+            text(lang, label).size(13),
+            buttons
+        ].spacing(12).into()
     }
     fn player_controls(&self, presentation: bool) -> Element<'static, Message, Theme, Renderer> {
         let lang = self.language();
