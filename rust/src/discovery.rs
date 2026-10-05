@@ -102,6 +102,9 @@ pub struct Discovery {
 }
 #[cfg(not(windows))]
 impl Discovery {
+    pub fn registration_failed(&self) -> bool {
+        false // ServiceDaemon retains accepted services across interface changes.
+    }
     pub fn start(device: &Device) -> Result<Self> {
         use mdns_sd::{ServiceDaemon, ServiceInfo};
         let daemon = ServiceDaemon::new()?;
@@ -163,7 +166,11 @@ impl Drop for Discovery {
 #[cfg(windows)]
 mod native {
     use super::*;
-    use std::sync::{Arc, Mutex, mpsc};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
     use std::time::Duration;
     use windows::{Win32::NetworkManagement::Dns::*, core::PWSTR};
 
@@ -188,6 +195,7 @@ mod native {
     struct Completion {
         data: Arc<Mutex<Data>>,
         name: String,
+        failed: Arc<AtomicBool>,
         done: mpsc::Sender<Result<Lease, u32>>,
     }
     struct Withdrawal {
@@ -198,6 +206,7 @@ mod native {
     struct Registration {
         name: String,
         data: Arc<Mutex<Data>>,
+        failed: Arc<AtomicBool>,
         done: Option<mpsc::Receiver<Result<Lease, u32>>>,
     }
     impl Registration {
@@ -236,9 +245,11 @@ mod native {
                 cancel: Box::default(),
             }));
             let (sender, done) = mpsc::channel();
+            let failed = Arc::new(AtomicBool::new(false));
             let context = Box::into_raw(Box::new(Completion {
                 data: data.clone(),
                 name: name.to_owned(),
+                failed: failed.clone(),
                 done: sender,
             }));
             let status = {
@@ -260,6 +271,7 @@ mod native {
             Ok(Self {
                 name: name.to_owned(),
                 data,
+                failed,
                 done: Some(done),
             })
         }
@@ -281,6 +293,7 @@ mod native {
                     withdraw: withdraw_service,
                 })
             } else {
+                completion.failed.store(true, Ordering::Release);
                 tracing::warn!(name = %completion.name, status, "Windows mDNS registration failed");
                 Err(status)
             };
@@ -364,6 +377,11 @@ mod native {
         _services: Vec<Registration>,
     }
     impl Discovery {
+        pub fn registration_failed(&self) -> bool {
+            self._services
+                .iter()
+                .any(|service| service.failed.load(Ordering::Acquire))
+        }
         pub fn start(device: &Device) -> Result<Self> {
             let name = device.shared.settings.read().unwrap().name.clone();
             let host = format!(
@@ -393,6 +411,32 @@ mod native {
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[test]
+        fn failed_completion_releases_storage_and_reports_retry_state() {
+            // No native operation is issued: exercise an error callback with
+            // owned backing storage and verify that it creates no service lease.
+            let data = Arc::new(Mutex::new(Data {
+                name: "Failed receiver".into(),
+                _strings: Vec::new(),
+                _keys: Vec::new(),
+                _values: Vec::new(),
+                _instance: Box::default(),
+                request: Box::default(),
+                cancel: Box::default(),
+            }));
+            let failed = Arc::new(AtomicBool::new(false));
+            let (sender, done) = mpsc::channel();
+            let context = Box::into_raw(Box::new(Completion {
+                data: data.clone(),
+                name: "Failed receiver".into(),
+                failed: failed.clone(),
+                done: sender,
+            }));
+            unsafe { completed(1223, context.cast(), std::ptr::null()) };
+            assert!(matches!(done.recv().unwrap(), Err(1223)));
+            assert!(failed.load(Ordering::Acquire));
+            assert_eq!(Arc::strong_count(&data), 1);
+        }
         #[test]
         fn windows_dns_registration_and_withdrawal_are_acknowledged() {
             let host = format!("{}.local", std::env::var("COMPUTERNAME").unwrap());

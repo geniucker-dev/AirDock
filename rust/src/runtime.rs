@@ -92,6 +92,9 @@ impl Runtime {
                                     return Err(error);
                                 }
                                 let restart_discovery = discovery.is_none()
+                                    || discovery
+                                        .as_ref()
+                                        .is_some_and(Discovery::registration_failed)
                                     || advertisement_changed(&current, &settings);
                                 *state.settings.write().unwrap() = settings;
                                 if restart_discovery {

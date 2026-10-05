@@ -34,8 +34,8 @@ compositor/renderer. Status messages never contain video planes or PCM.
 AirPlay TXT records and `/info` share a receiver UUID derived from the persisted
 pairing public key. The display UUID has a separate domain; neither depends on
 the receiver name, port or network adapter. Existing pairing keys remain intact.
-Only name/HLS/HEVC changes restart discovery; unrelated preference saves keep
-the active advertisements.
+Name/HLS/HEVC changes restart discovery. Unrelated preference saves keep active
+advertisements, while a failed asynchronous Windows registration is retried.
 
 Windows shutdown waits for registration completion, cancels pending operations
 and waits for `DnsServiceDeRegister` acknowledgement. Successful registrations
