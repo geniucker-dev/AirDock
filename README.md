@@ -68,6 +68,14 @@ is retained. Explicitly restoring the window, leaving fullscreen or opening
 settings keeps the window open instead. Audio/control connections may remain
 active after video has ended.
 
+During video mirroring or playing HLS, the Windows receiver requests that the
+display and system stay awake. This is independent of fullscreen/window/tray
+visibility and releases after video teardown, HLS pause/end/failure or program
+exit. Audio-only/control connections do not keep the display awake. Requests
+are made only on transitions, without per-frame work or simulated user input.
+Manual locking and mandatory OS lock policies still apply; classic password
+screensaver policies are not overridden. Linux/macOS idle inhibition is not yet implemented.
+
 ## Updates
 
 Windows installer and portable builds can update themselves from GitHub's latest
